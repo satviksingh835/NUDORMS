@@ -53,8 +53,10 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--AlikedExtraction.max_num_features", "4096",
         ])
         _run([
-            "colmap", "exhaustive_matcher",
+            "colmap", "sequential_matcher",
             "--database_path", str(db),
+            "--SequentialMatching.overlap", str(SEQUENTIAL_MATCHER_OVERLAP),
+            "--SequentialMatching.quadratic_overlap", "1",
             "--FeatureMatching.type", "ALIKED_LIGHTGLUE",
             "--FeatureMatching.use_gpu", "1",
             "--AlikedMatching.lightglue_model_path", ALIKED_LIGHTGLUE_MODEL,

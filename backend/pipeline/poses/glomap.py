@@ -26,10 +26,12 @@ from ..types import StageResult
 
 log = logging.getLogger("nudorms.poses.glomap")
 
-# Match each frame with N neighbors. Bumped from 15 — small rooms with
-# sidestep capture have closer-spaced viewpoints, so neighbors are *visually*
-# overlapping out to ~30 frames in either direction.
-SEQUENTIAL_MATCHER_OVERLAP = 30
+# Sequential matcher overlap: each frame is matched against its N temporal
+# neighbors. 50 is high — gives us good chance of bridging "varied capture"
+# where the user changes motion type (sidestep -> pivot -> in/out) every few
+# seconds. Combined with quadratic_overlap, this also matches frames at
+# distances 1,2,4,8,16,32,64 -> handles loop closures naturally.
+SEQUENTIAL_MATCHER_OVERLAP = 50
 
 # Our COLMAP build has download-from-URL disabled (libcurl/libssl missing
 # during cmake), so we ship the ALIKED + LightGlue ONNX models manually
@@ -123,9 +125,17 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--AlikedExtraction.n32_model_path", ALIKED_N32_MODEL,
             "--AlikedExtraction.max_num_features", "4096",
         ])
+        # Sequential matching with quadratic overlap. Each frame matches its
+        # 50 temporal neighbors plus exponentially-spaced ones (frame N-64,
+        # N-32, ..., N+32, N+64). Robust to varied captures where the user
+        # switches motion types — exhaustive matching produced disconnected
+        # clusters when the capture had multi-segment motion (only 7/300
+        # frames registered on test6).
         _run([
-            "colmap", "exhaustive_matcher",
+            "colmap", "sequential_matcher",
             "--database_path", str(db),
+            "--SequentialMatching.overlap", str(SEQUENTIAL_MATCHER_OVERLAP),
+            "--SequentialMatching.quadratic_overlap", "1",
             "--FeatureMatching.type", "ALIKED_LIGHTGLUE",
             "--FeatureMatching.use_gpu", "1",
             "--AlikedMatching.lightglue_model_path", ALIKED_LIGHTGLUE_MODEL,
