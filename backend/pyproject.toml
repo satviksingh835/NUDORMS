@@ -1,0 +1,34 @@
+[project]
+name = "nudorms-backend"
+version = "0.0.1"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "celery[redis]>=5.4",
+  "redis>=5.0",
+  "sqlalchemy>=2.0",
+  "pydantic>=2.7",
+  "boto3>=1.34",
+  "python-multipart>=0.0.9",
+  "ffmpeg-python>=0.2",
+  "numpy>=1.26",
+  "opencv-python-headless>=4.10",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# GPU-only deps (installed in the worker image, not the API image)
+gpu = [
+  "torch>=2.4",
+  "gsplat>=1.4",
+  "pycolmap>=3.10",
+  "lpips>=0.1.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app", "pipeline"]

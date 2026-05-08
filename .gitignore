@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Local data / models / scans
+data/
+*.db
+*.sqlite
+
+# Editor
+.DS_Store
+.vscode/
+.idea/
