@@ -83,7 +83,7 @@ def main(pose_out_str: str, iters_str: str | None = None) -> int:
         sys.executable, str(trainer), "mcmc",
         "--data_dir", str(stage),
         "--result_dir", str(out),
-        "--data_factor", "2",            # 2x downsample for speed; bump to 1 for max quality
+        "--data_factor", "1",            # full res; avoids needing pre-downsampled images_N/
         "--max_steps", str(iters),
         "--save_steps", str(iters),       # only save final checkpoint
         "--eval_steps", str(iters // 5),  # eval 5 times during training
