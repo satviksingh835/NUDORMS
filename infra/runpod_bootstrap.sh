@@ -21,7 +21,8 @@ apt-get update
 apt-get install -y --no-install-recommends \
   git build-essential cmake ninja-build pkg-config ffmpeg \
   libboost-all-dev libeigen3-dev libceres-dev libfreeimage-dev \
-  libgoogle-glog-dev libsuitesparse-dev libcgal-dev libgflags-dev
+  libgoogle-glog-dev libsuitesparse-dev libcgal-dev libgflags-dev \
+  libopenimageio-dev libmetis-dev libsqlite3-dev
 
 if [ ! -d /workspace/nudorms ]; then
   git clone "$REPO" /workspace/nudorms
@@ -32,15 +33,18 @@ git checkout "$REF"
 git pull
 
 # COLMAP + GLOMAP from source — no maintained pkgs that pair correctly.
+# GUI_ENABLED=OFF saves ~10 min of Qt build; we never render on the pod.
 if ! command -v colmap >/dev/null; then
   git clone --depth=1 https://github.com/colmap/colmap /tmp/colmap
-  cmake -S /tmp/colmap -B /tmp/colmap/build -GNinja -DCMAKE_BUILD_TYPE=Release
-  cmake --build /tmp/colmap/build --target install -j
+  cmake -S /tmp/colmap -B /tmp/colmap/build -GNinja -DCMAKE_BUILD_TYPE=Release \
+    -DGUI_ENABLED=OFF -DCUDA_ENABLED=ON -DCMAKE_CUDA_ARCHITECTURES=native
+  cmake --build /tmp/colmap/build --target install -j"$(nproc)"
 fi
 if ! command -v glomap >/dev/null; then
   git clone --depth=1 https://github.com/colmap/glomap /tmp/glomap
-  cmake -S /tmp/glomap -B /tmp/glomap/build -GNinja -DCMAKE_BUILD_TYPE=Release
-  cmake --build /tmp/glomap/build --target install -j
+  cmake -S /tmp/glomap -B /tmp/glomap/build -GNinja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CUDA_ARCHITECTURES=native
+  cmake --build /tmp/glomap/build --target install -j"$(nproc)"
 fi
 
 pip install --upgrade pip
