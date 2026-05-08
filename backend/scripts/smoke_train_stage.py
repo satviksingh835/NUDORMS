@@ -100,8 +100,17 @@ def main(pose_out_str: str, iters_str: str | None = None) -> int:
         "--ply_steps", str(final_step),
         "--init_type", "sfm",
         "--strategy.cap-max", "500000",
+        # Stronger scale_reg fights the "stretched cigar" failure mode —
+        # the trainer's escape hatch when angular parallax is sparse.
+        "--scale-reg", "0.05",
         "--opacity-reg", "0.01",
-        "--scale-reg", "0.01",
+        # Mip-Splatting style anti-aliasing — visibly reduces streaks
+        # when viewing the splat from far/close vs training distances.
+        "--antialiased",
+        # SH degree 3 is overkill for indoor scenes and lets the trainer
+        # paint view-dependent streaks. Limiting to 1 forces less
+        # view-dependent appearance, which suppresses streaking artifacts.
+        "--sh-degree", "1",
         "--packed",
     ]
     print("\n── gsplat MCMC training ──")
