@@ -79,16 +79,29 @@ def main(pose_out_str: str, iters_str: str | None = None) -> int:
     #   --save_steps      checkpoint frequency
     #   --eval_steps      eval frequency on holdout views
     #   --packed          memory-efficient packed gradients
+    # Indoor textureless rooms behave best with FEWER but more disciplined
+    # gaussians than the gsplat defaults. Three changes that reduce floaters
+    # and stray noise:
+    #   1. Cap gaussian count at 500k (default 1M) — forces quality over quantity.
+    #   2. Strong opacity regularization — kills semi-transparent floaters.
+    #   3. Scale regularization — prevents the big stretched-blob failure mode.
+    # Off-by-one in stock simple_trainer means save/eval at max_steps doesn't
+    # fire (final step is max_steps-1). Using max_steps-1 for save/eval/ply
+    # to actually trigger them.
+    final_step = iters - 1
     cmd = [
         sys.executable, str(trainer), "mcmc",
         "--data_dir", str(stage),
         "--result_dir", str(out),
-        "--data_factor", "1",            # full res; avoids needing pre-downsampled images_N/
+        "--data_factor", "1",
         "--max_steps", str(iters),
-        "--save_steps", str(iters),       # only save final checkpoint
-        "--eval_steps", str(iters // 5),  # eval 5 times during training
-        "--ply_steps", str(iters),        # export final .ply
-        "--init_type", "sfm",             # init from COLMAP points
+        "--save_steps", str(final_step),
+        "--eval_steps", str(final_step),
+        "--ply_steps", str(final_step),
+        "--init_type", "sfm",
+        "--strategy.cap-max", "500000",
+        "--opacity-reg", "0.01",
+        "--scale-reg", "0.01",
         "--packed",
     ]
     print("\n── gsplat MCMC training ──")
