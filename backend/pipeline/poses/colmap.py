@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from ..types import StageResult
-from .glomap import SEQUENTIAL_MATCHER_OVERLAP, _read_sparse_metrics
+from .glomap import SEQUENTIAL_MATCHER_OVERLAP, USE_GPU_SIFT, _read_sparse_metrics
 
 log = logging.getLogger("nudorms.poses.colmap")
 
@@ -41,14 +41,14 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--image_path", str(frames_dir),
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "OPENCV",
-            "--SiftExtraction.use_gpu", "1",
+            "--SiftExtraction.use_gpu", "1" if USE_GPU_SIFT else "0",
         ])
         _run([
             "colmap", "sequential_matcher",
             "--database_path", str(db),
             "--SequentialMatching.overlap", str(SEQUENTIAL_MATCHER_OVERLAP),
             "--SequentialMatching.quadratic_overlap", "1",
-            "--SiftMatching.use_gpu", "1",
+            "--SiftMatching.use_gpu", "1" if USE_GPU_SIFT else "0",
         ])
         _run([
             "colmap", "mapper",

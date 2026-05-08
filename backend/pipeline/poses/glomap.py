@@ -27,6 +27,12 @@ log = logging.getLogger("nudorms.poses.glomap")
 
 SEQUENTIAL_MATCHER_OVERLAP = 15   # match each frame with its 15 neighbors
 
+# COLMAP's GPU SIFT extractor needs an OpenGL context that headless pods
+# usually lack. CPU SIFT is ~3-5x slower per image but reliable. Override
+# with NUDORMS_USE_GPU_SIFT=1 if your pod has a working GL context.
+import os
+USE_GPU_SIFT = os.environ.get("NUDORMS_USE_GPU_SIFT") == "1"
+
 
 def _have(binary: str) -> bool:
     return shutil.which(binary) is not None
@@ -34,7 +40,13 @@ def _have(binary: str) -> bool:
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     log.info("running: %s", " ".join(cmd))
-    return subprocess.run(cmd, check=True, capture_output=True, text=True)
+    print(f"  $ {cmd[0]} {cmd[1]} ...", flush=True)
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if proc.returncode != 0:
+        # Surface stderr so we can see what actually failed.
+        tail = (proc.stderr or proc.stdout or "")[-1500:]
+        raise subprocess.CalledProcessError(proc.returncode, cmd, output=proc.stdout, stderr=tail)
+    return proc
 
 
 def _read_sparse_metrics(sparse_dir: Path, total_frames: int) -> dict:
@@ -90,14 +102,14 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--image_path", str(frames_dir),
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "OPENCV",
-            "--SiftExtraction.use_gpu", "1",
+            "--SiftExtraction.use_gpu", "1" if USE_GPU_SIFT else "0",
         ])
         _run([
             "colmap", "sequential_matcher",
             "--database_path", str(db),
             "--SequentialMatching.overlap", str(SEQUENTIAL_MATCHER_OVERLAP),
             "--SequentialMatching.quadratic_overlap", "1",
-            "--SiftMatching.use_gpu", "1",
+            "--SiftMatching.use_gpu", "1" if USE_GPU_SIFT else "0",
         ])
         _run([
             "glomap", "mapper",

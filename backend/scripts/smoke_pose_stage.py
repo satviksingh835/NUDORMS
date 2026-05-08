@@ -65,6 +65,11 @@ def main(video: str, out: str | None = None) -> int:
         poses = pose_ensemble.run("smoke", workdir, {"frames_dir": str(frames_out)})
         pprint({"ok": poses.ok, "metrics": poses.metrics,
                 "failure_reason": poses.failure_reason})
+        # Surface per-attempt failures (the ensemble swallows them otherwise).
+        from pipeline.poses import colmap as colmap_mod, glomap as glomap_mod
+        for name in ("glomap", "colmap"):
+            log_path = workdir / f"poses_{name}" / "sparse"
+            print(f"  {name} sparse dir exists: {log_path.exists()} -> {log_path}")
         if not poses.ok:
             (out_root / "metrics.json").write_text(json.dumps({
                 "qc": qc.metrics, "frame_select": sel.metrics, "pose_failure": poses.failure_reason,

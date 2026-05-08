@@ -19,10 +19,17 @@ REPO="${NUDORMS_REPO:?NUDORMS_REPO not set}"
 
 apt-get update
 apt-get install -y --no-install-recommends \
-  git build-essential cmake ninja-build pkg-config ffmpeg \
+  git build-essential ninja-build pkg-config ffmpeg \
   libboost-all-dev libeigen3-dev libceres-dev libfreeimage-dev \
   libgoogle-glog-dev libsuitesparse-dev libcgal-dev libgflags-dev \
-  libopenimageio-dev libmetis-dev libsqlite3-dev
+  libopenimageio-dev libmetis-dev libsqlite3-dev openimageio-tools \
+  libopenexr-dev libtiff-dev libpng-dev libjpeg-dev \
+  libgl1-mesa-dev libglu1-mesa-dev libegl1-mesa-dev \
+  libglew-dev libopencv-dev
+
+# Newer cmake than Ubuntu 22.04 ships (faiss/colmap deps need >=3.24).
+pip install --upgrade "cmake>=3.28"
+hash -r
 
 if [ ! -d /workspace/nudorms ]; then
   git clone "$REPO" /workspace/nudorms
@@ -37,13 +44,13 @@ git pull
 if ! command -v colmap >/dev/null; then
   git clone --depth=1 https://github.com/colmap/colmap /tmp/colmap
   cmake -S /tmp/colmap -B /tmp/colmap/build -GNinja -DCMAKE_BUILD_TYPE=Release \
-    -DGUI_ENABLED=OFF -DCUDA_ENABLED=ON -DCMAKE_CUDA_ARCHITECTURES=native
+    -DGUI_ENABLED=OFF -DCUDA_ENABLED=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-80;86;89}"
   cmake --build /tmp/colmap/build --target install -j"$(nproc)"
 fi
 if ! command -v glomap >/dev/null; then
   git clone --depth=1 https://github.com/colmap/glomap /tmp/glomap
   cmake -S /tmp/glomap -B /tmp/glomap/build -GNinja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CUDA_ARCHITECTURES=native
+    -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-80;86;89}"
   cmake --build /tmp/glomap/build --target install -j"$(nproc)"
 fi
 
