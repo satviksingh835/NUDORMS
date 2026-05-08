@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..orchestrator import StageResult
+from ..types import StageResult
 from . import colmap, glomap, mast3r
 
 MIN_INLIER_RATIO = 0.45

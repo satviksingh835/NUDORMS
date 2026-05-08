@@ -10,7 +10,7 @@ from pathlib import Path
 
 from app.storage import scan_key
 
-from ..orchestrator import StageResult
+from ..types import StageResult
 
 TIERS = {"preview": 0.10, "standard": 0.40, "hires": 1.00}
 

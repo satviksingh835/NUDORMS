@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 from app.db import get_session
@@ -19,19 +18,14 @@ from . import frame_select, ingest_qc, mesh_export
 from .poses import ensemble as pose_ensemble
 from .train import eval as eval_stage
 from .train import gsplat_mcmc, twodgs
+from .types import StageResult  # re-exported for backward compat
+
+__all__ = ["run_pipeline", "StageResult"]
 
 log = logging.getLogger("nudorms.pipeline")
 
 PSNR_PASS = 28.0
 PSNR_RETRY = 24.0
-
-
-@dataclass
-class StageResult:
-    ok: bool
-    metrics: dict
-    artifacts: dict
-    failure_reason: str | None = None
 
 
 def _set_status(scan_id: str, status: ScanStatus, **fields) -> None:

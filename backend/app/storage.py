@@ -40,6 +40,12 @@ def put(key: str, body: BinaryIO | bytes, content_type: str | None = None) -> st
     return key
 
 
+def download(key: str, dest) -> None:
+    """Download an object to a local path."""
+    cfg = StorageConfig()
+    _client(cfg).download_file(cfg.bucket, key, str(dest))
+
+
 def presigned_get(key: str, expires: int = 3600) -> str:
     cfg = StorageConfig()
     return _client(cfg).generate_presigned_url(

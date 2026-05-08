@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..orchestrator import StageResult
+from ..types import StageResult
 
 
 def run(frames_dir: Path, out_dir: Path) -> StageResult:

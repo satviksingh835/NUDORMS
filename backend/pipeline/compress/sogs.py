@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.storage import put, scan_key
 
-from ..orchestrator import StageResult
+from ..types import StageResult
 
 
 def run(scan_id: str, workdir: Path, train_artifacts: dict) -> StageResult:

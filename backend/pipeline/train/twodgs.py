@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..orchestrator import StageResult
+from ..types import StageResult
 
 
 def run(scan_id: str, workdir: Path, pose_artifacts: dict) -> StageResult:

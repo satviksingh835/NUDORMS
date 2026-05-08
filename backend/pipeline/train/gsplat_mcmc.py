@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..orchestrator import StageResult
+from ..types import StageResult
 
 
 @dataclass
