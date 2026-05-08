@@ -8,7 +8,8 @@ import sys
 from app.storage import put
 
 
-def main(renders_dir: str = "/workspace/test5_out/splat/renders", n: int = 6) -> int:
+def main(renders_dir: str = "/workspace/test5_out/splat/renders", n: int | str = 6) -> int:
+    n = int(n)
     paths = sorted(glob.glob(os.path.join(renders_dir, "*.png")))[:n]
     if not paths:
         print(f"no PNGs found in {renders_dir}", file=sys.stderr)

@@ -85,10 +85,10 @@ def main(pose_out_str: str, iters_str: str | None = None) -> int:
     #   1. Cap gaussian count at 500k (default 1M) — forces quality over quantity.
     #   2. Strong opacity regularization — kills semi-transparent floaters.
     #   3. Scale regularization — prevents the big stretched-blob failure mode.
-    # Off-by-one in stock simple_trainer means save/eval at max_steps doesn't
-    # fire (final step is max_steps-1). Using max_steps-1 for save/eval/ply
-    # to actually trigger them.
-    final_step = iters - 1
+    # Stock simple_trainer's final step is max_steps-2 (its training loop
+    # increments after the eval check). Using max_steps-2 for save/eval/ply
+    # so they actually trigger; otherwise we have to manually export later.
+    final_step = iters - 2
     cmd = [
         sys.executable, str(trainer), "mcmc",
         "--data_dir", str(stage),
