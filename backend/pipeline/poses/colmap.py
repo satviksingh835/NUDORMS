@@ -47,7 +47,7 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
         _run([
             "colmap", "exhaustive_matcher",
             "--database_path", str(db),
-            "--FeatureMatching.type", "ALIKED+LIGHTGLUE",
+            "--FeatureMatching.type", "ALIKED_LIGHTGLUE",
             "--FeatureMatching.use_gpu", "1",
         ])
         _run([
