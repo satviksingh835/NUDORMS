@@ -11,7 +11,13 @@ import subprocess
 from pathlib import Path
 
 from ..types import StageResult
-from .glomap import SEQUENTIAL_MATCHER_OVERLAP, USE_GPU_SIFT, _read_sparse_metrics
+from .glomap import (
+    ALIKED_LIGHTGLUE_MODEL,
+    ALIKED_N32_MODEL,
+    SEQUENTIAL_MATCHER_OVERLAP,
+    USE_GPU_SIFT,
+    _read_sparse_metrics,
+)
 
 log = logging.getLogger("nudorms.poses.colmap")
 
@@ -41,14 +47,17 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--image_path", str(frames_dir),
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "OPENCV",
-            "--FeatureExtraction.type", "ALIKED",
+            "--FeatureExtraction.type", "ALIKED_N32",
             "--FeatureExtraction.use_gpu", "1",
+            "--AlikedExtraction.n32_model_path", ALIKED_N32_MODEL,
+            "--AlikedExtraction.max_num_features", "4096",
         ])
         _run([
             "colmap", "exhaustive_matcher",
             "--database_path", str(db),
             "--FeatureMatching.type", "ALIKED_LIGHTGLUE",
             "--FeatureMatching.use_gpu", "1",
+            "--AlikedMatching.lightglue_model_path", ALIKED_LIGHTGLUE_MODEL,
         ])
         _run([
             "colmap", "mapper",

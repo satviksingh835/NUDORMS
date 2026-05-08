@@ -30,6 +30,13 @@ log = logging.getLogger("nudorms.poses.glomap")
 # overlapping out to ~30 frames in either direction.
 SEQUENTIAL_MATCHER_OVERLAP = 30
 
+# Our COLMAP build has download-from-URL disabled (libcurl/libssl missing
+# during cmake), so we ship the ALIKED + LightGlue ONNX models manually
+# and pass their paths explicitly. Override with NUDORMS_MODELS_DIR.
+MODELS_DIR = os.environ.get("NUDORMS_MODELS_DIR", "/workspace/colmap_models")
+ALIKED_N32_MODEL = f"{MODELS_DIR}/aliked-n32.onnx"
+ALIKED_LIGHTGLUE_MODEL = f"{MODELS_DIR}/aliked-lightglue.onnx"
+
 # COLMAP's GPU SIFT extractor needs an OpenGL context that headless pods
 # usually lack. CPU SIFT is ~3-5x slower per image but reliable. Override
 # with NUDORMS_USE_GPU_SIFT=1 if your pod has a working GL context.
@@ -111,14 +118,17 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--image_path", str(frames_dir),
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "OPENCV",
-            "--FeatureExtraction.type", "ALIKED",
+            "--FeatureExtraction.type", "ALIKED_N32",
             "--FeatureExtraction.use_gpu", "1",
+            "--AlikedExtraction.n32_model_path", ALIKED_N32_MODEL,
+            "--AlikedExtraction.max_num_features", "4096",
         ])
         _run([
             "colmap", "exhaustive_matcher",
             "--database_path", str(db),
             "--FeatureMatching.type", "ALIKED_LIGHTGLUE",
             "--FeatureMatching.use_gpu", "1",
+            "--AlikedMatching.lightglue_model_path", ALIKED_LIGHTGLUE_MODEL,
         ])
         _run([
             "glomap", "mapper",
