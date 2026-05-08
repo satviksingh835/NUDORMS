@@ -99,23 +99,26 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
         return StageResult(False, {}, {}, failure_reason="no frames in frames_dir")
 
     try:
+        # ALIKED (learned keypoint detector) + LightGlue (learned matcher).
+        # Dramatically better than SIFT on textureless surfaces: SIFT looks
+        # for image gradients and finds ~nothing on plain dorm walls; ALIKED
+        # was trained to pick repeatable points anywhere, including smooth
+        # regions. The exact COLMAP enum strings come from its option parser
+        # — if these names are wrong, the error message lists valid values.
         _run([
             "colmap", "feature_extractor",
             "--database_path", str(db),
             "--image_path", str(frames_dir),
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "OPENCV",
-            "--FeatureExtraction.use_gpu", "1" if USE_GPU_SIFT else "0",
+            "--FeatureExtraction.type", "ALIKED",
+            "--FeatureExtraction.use_gpu", "1",
         ])
-        # Exhaustive matching: pairs every frame with every other. ~33k pairs
-        # for 258 frames, fast on GPU SIFT and guaranteed to find every overlap
-        # including loop closures. Sequential matching (with vocab-tree loop
-        # detection) is faster for >500 frames; we'll switch the heuristic
-        # later once we have larger captures to tune against.
         _run([
             "colmap", "exhaustive_matcher",
             "--database_path", str(db),
-            "--FeatureMatching.use_gpu", "1" if USE_GPU_SIFT else "0",
+            "--FeatureMatching.type", "ALIKED+LIGHTGLUE",
+            "--FeatureMatching.use_gpu", "1",
         ])
         _run([
             "glomap", "mapper",

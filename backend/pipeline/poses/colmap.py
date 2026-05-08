@@ -41,12 +41,14 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--image_path", str(frames_dir),
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "OPENCV",
-            "--FeatureExtraction.use_gpu", "1" if USE_GPU_SIFT else "0",
+            "--FeatureExtraction.type", "ALIKED",
+            "--FeatureExtraction.use_gpu", "1",
         ])
         _run([
             "colmap", "exhaustive_matcher",
             "--database_path", str(db),
-            "--FeatureMatching.use_gpu", "1" if USE_GPU_SIFT else "0",
+            "--FeatureMatching.type", "ALIKED+LIGHTGLUE",
+            "--FeatureMatching.use_gpu", "1",
         ])
         _run([
             "colmap", "mapper",
