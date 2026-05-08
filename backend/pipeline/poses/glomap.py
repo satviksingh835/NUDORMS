@@ -25,7 +25,10 @@ from ..types import StageResult
 
 log = logging.getLogger("nudorms.poses.glomap")
 
-SEQUENTIAL_MATCHER_OVERLAP = 15   # match each frame with its 15 neighbors
+# Match each frame with N neighbors. Bumped from 15 — small rooms with
+# sidestep capture have closer-spaced viewpoints, so neighbors are *visually*
+# overlapping out to ~30 frames in either direction.
+SEQUENTIAL_MATCHER_OVERLAP = 30
 
 # COLMAP's GPU SIFT extractor needs an OpenGL context that headless pods
 # usually lack. CPU SIFT is ~3-5x slower per image but reliable. Override
@@ -104,11 +107,14 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--ImageReader.camera_model", "OPENCV",
             "--FeatureExtraction.use_gpu", "1" if USE_GPU_SIFT else "0",
         ])
+        # Exhaustive matching: pairs every frame with every other. ~33k pairs
+        # for 258 frames, fast on GPU SIFT and guaranteed to find every overlap
+        # including loop closures. Sequential matching (with vocab-tree loop
+        # detection) is faster for >500 frames; we'll switch the heuristic
+        # later once we have larger captures to tune against.
         _run([
-            "colmap", "sequential_matcher",
+            "colmap", "exhaustive_matcher",
             "--database_path", str(db),
-            "--SequentialMatching.overlap", str(SEQUENTIAL_MATCHER_OVERLAP),
-            "--SequentialMatching.quadratic_overlap", "1",
             "--FeatureMatching.use_gpu", "1" if USE_GPU_SIFT else "0",
         ])
         _run([

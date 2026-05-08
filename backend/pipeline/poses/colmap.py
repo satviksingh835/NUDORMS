@@ -44,10 +44,8 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--FeatureExtraction.use_gpu", "1" if USE_GPU_SIFT else "0",
         ])
         _run([
-            "colmap", "sequential_matcher",
+            "colmap", "exhaustive_matcher",
             "--database_path", str(db),
-            "--SequentialMatching.overlap", str(SEQUENTIAL_MATCHER_OVERLAP),
-            "--SequentialMatching.quadratic_overlap", "1",
             "--FeatureMatching.use_gpu", "1" if USE_GPU_SIFT else "0",
         ])
         _run([
