@@ -17,6 +17,7 @@ Quality is judged from the resulting sparse model:
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,7 +41,6 @@ ALIKED_LIGHTGLUE_MODEL = f"{MODELS_DIR}/aliked-lightglue.onnx"
 # COLMAP's GPU SIFT extractor needs an OpenGL context that headless pods
 # usually lack. CPU SIFT is ~3-5x slower per image but reliable. Override
 # with NUDORMS_USE_GPU_SIFT=1 if your pod has a working GL context.
-import os
 USE_GPU_SIFT = os.environ.get("NUDORMS_USE_GPU_SIFT") == "1"
 
 
