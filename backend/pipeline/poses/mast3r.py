@@ -183,11 +183,12 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
         params=[fx, fy, cx, cy],
         camera_id=1,
     )
-    rec.add_camera(camera)
+    # Pycolmap 4.x stores pose on a Frame, not on Image. Use the trivial-rig
+    # helper so each image gets its own frame_id == image_id, and pass the
+    # pose through add_image_with_trivial_frame's two-arg overload (which
+    # also registers the frame).
+    rec.add_camera_with_trivial_rig(camera)
 
-    # Per-image extrinsics. cam_from_world = inv(cam2w). Pycolmap 4.x makes
-    # cam_from_world (and points2D) read-only on Image, so everything has to
-    # go through the constructor.
     for i in range(n_imgs):
         cam2w = cam2w_all[i]
         w2c = np.linalg.inv(cam2w)
@@ -200,10 +201,8 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             image_id=i + 1,
             name=Path(image_paths[i]).name,
             camera_id=1,
-            cam_from_world=rigid,
         )
-        rec.add_image(image)
-        rec.register_image(i + 1)
+        rec.add_image_with_trivial_frame(image, rigid)
 
     # Add SGA's per-image sparse anchors as points3D for splat init. We skip
     # populating image.points2D and per-point Tracks: gsplat's COLMAP loader
