@@ -34,15 +34,18 @@ def run(scan_id: str, workdir: Path, frame_artifacts: dict) -> StageResult:
 
     attempts: list[tuple[str, StageResult]] = []
 
-    g = glomap.run(frames_dir, workdir / "poses_glomap")
-    attempts.append(("glomap", g))
-    if _passes_quality(g, total):
-        return _wrap("glomap", g, attempts)
-
+    # MASt3R first: handles casual capture (varied motion, textureless walls).
+    # GLOMAP+ALIKED second: faster, tighter poses on careful dense captures.
+    # COLMAP incremental last: slowest, most exhaustive fallback.
     m = mast3r.run(frames_dir, workdir / "poses_mast3r")
     attempts.append(("mast3r", m))
     if _passes_quality(m, total):
         return _wrap("mast3r", m, attempts)
+
+    g = glomap.run(frames_dir, workdir / "poses_glomap")
+    attempts.append(("glomap", g))
+    if _passes_quality(g, total):
+        return _wrap("glomap", g, attempts)
 
     c = colmap.run(frames_dir, workdir / "poses_colmap")
     attempts.append(("colmap", c))

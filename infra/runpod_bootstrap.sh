@@ -57,5 +57,28 @@ fi
 pip install --upgrade pip
 pip install -e ./backend[gpu]
 
+# MASt3R-SfM: learned pose estimation that replaces COLMAP on casual captures.
+# Clone once; skip if already present (pod restart or baked template).
+if [ ! -d /workspace/mast3r ]; then
+  git clone --recursive https://github.com/naver/mast3r /workspace/mast3r
+  pip install -r /workspace/mast3r/dust3r/requirements.txt
+  pip install -r /workspace/mast3r/dust3r/requirements_optional.txt
+  pip install -r /workspace/mast3r/requirements.txt
+  # kapture + kapture-localization: required by mast3r/colmap/mapping.py
+  pip install kapture kapture-localization
+  # install mast3r package itself so `from mast3r.model import ...` resolves
+  pip install -e /workspace/mast3r
+fi
+
+# Model weights (~2 GB, ViT-Large 512). Download once, skip if cached.
+# Store outside the repo so a git checkout doesn't wipe them.
+mkdir -p /workspace/mast3r_models
+MAST3R_WEIGHTS=/workspace/mast3r_models/MASt3R.pth
+if [ ! -f "$MAST3R_WEIGHTS" ]; then
+  wget -q --show-progress \
+    "https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth" \
+    -O "$MAST3R_WEIGHTS"
+fi
+
 export PYTHONPATH=/workspace/nudorms/backend
 exec celery -A app.celery_app worker --loglevel=info -Q gpu --concurrency=1
