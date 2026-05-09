@@ -17,7 +17,6 @@ Configure via env vars:
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 from typing import Optional
 import os
@@ -60,14 +59,11 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
     if not Path(MAST3R_MODEL).exists():
         return StageResult(False, {}, {},
                            failure_reason=f"MASt3R weights not found: {MAST3R_MODEL}")
-    if not shutil.which("glomap"):
-        return StageResult(False, {}, {}, failure_reason="glomap binary not on PATH")
-
     try:
         from mast3r.colmap.mapping import (
             kapture_import_image_folder_or_list,
             run_mast3r_matching,
-            glomap_run_mapper,
+            pycolmap_run_mapper,
         )
         from kapture.converter.colmap.database_extra import kapture_to_colmap
         from kapture.converter.colmap.database import COLMAPDatabase
@@ -131,12 +127,15 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             f.write(f"{p1} {p2}\n")
     pycolmap.verify_matches(str(db_path), str(pairs_txt))
 
+    # pycolmap_run_mapper, not glomap_run_mapper: the standalone glomap binary
+    # rejects kapture-written DBs ("SQLite SQL logic error" — schema mismatch).
+    # pycolmap reads its own schema cleanly; ~3-5x slower but reliable.
     try:
-        glomap_run_mapper("glomap", str(db_path), str(recon_path), str(frames_dir))
+        pycolmap_run_mapper(str(db_path), str(recon_path), str(frames_dir))
     except Exception as e:
-        return StageResult(False, {}, {}, failure_reason=f"glomap mapper failed: {e}")
+        return StageResult(False, {}, {}, failure_reason=f"pycolmap mapper failed: {e}")
 
-    # glomap writes the sparse model to reconstruction/0/
+    # pycolmap incremental_mapping writes models to reconstruction/0/
     sparse_0 = recon_path / "0"
     if not (sparse_0 / "cameras.bin").exists():
         return StageResult(False, {}, {},
