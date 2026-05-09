@@ -42,6 +42,10 @@ MAST3R_MODEL = os.environ.get(
 )
 WIN_SIZE = int(os.environ.get("NUDORMS_MAST3R_WIN", "20"))
 INFER_SIZE = int(os.environ.get("NUDORMS_MAST3R_SIZE", "512"))
+# Anchor density for the SGA optimizer. Lower = more anchors = more VRAM.
+# Upstream default is 8; on a 24 GB GPU we OOM around ~200 frames at 8,
+# so we ship 16 by default and let users tighten it on bigger GPUs.
+SUBSAMPLE = int(os.environ.get("NUDORMS_MAST3R_SUBSAMPLE", "16"))
 
 # SGA writes per-pair torch.save zips and reads them back across the run.
 # On RunPod, /workspace is MooseFS (network FS) which races against torch's
@@ -136,6 +140,7 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
         scene = sparse_global_alignment(
             image_paths, pairs, str(cache_dir), model,
             shared_intrinsics=True,  # one phone, one camera — share intrinsics
+            subsample=SUBSAMPLE,
             device="cuda",
         )
     except Exception as e:
