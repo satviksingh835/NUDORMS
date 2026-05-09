@@ -62,33 +62,49 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 
 def _read_sparse_metrics(sparse_dir: Path, total_frames: int) -> dict:
-    """Parse sparse/0/{cameras,images,points3D}.bin via pycolmap."""
+    """Parse sparse/0/{cameras,images,points3D}.bin.
+
+    Tries modern pycolmap first; falls back to reading the binary header
+    directly so it works with any pycolmap version (or none at all).
+    """
+    import struct
+
     try:
         import pycolmap
-    except ImportError:
-        # Without pycolmap we can still confirm the model exists, but no quality metrics.
-        return {"registered_images": -1, "reproj_error": -1, "mean_track_length": -1,
-                "inlier_ratio": 0.5, "_no_pycolmap": True}
+        rec = pycolmap.Reconstruction(str(sparse_dir))
+        n_images = rec.num_reg_images()
+        n_points = rec.num_points3D()
+        if n_points == 0:
+            return {"registered_images": n_images, "reproj_error": 1e9,
+                    "mean_track_length": 0, "inlier_ratio": 0.0}
+        track_lengths = [len(p.track.elements) for p in rec.points3D.values()]
+        errors = [p.error for p in rec.points3D.values()]
+        return {
+            "registered_images": int(n_images),
+            "reproj_error": float(sum(errors) / len(errors)),
+            "mean_track_length": float(sum(track_lengths) / len(track_lengths)),
+            "n_points3D": int(n_points),
+            "inlier_ratio": float(n_images / max(total_frames, 1)),
+        }
+    except (ImportError, AttributeError):
+        pass
 
-    rec = pycolmap.Reconstruction(str(sparse_dir))
-    n_images = rec.num_reg_images()
-    n_points = rec.num_points3D()
-    if n_points == 0:
-        return {"registered_images": n_images, "reproj_error": 1e9,
-                "mean_track_length": 0, "inlier_ratio": 0.0}
-
-    track_lengths = [len(p.track.elements) for p in rec.points3D.values()]
-    errors = [p.error for p in rec.points3D.values()]
-    return {
-        "registered_images": int(n_images),
-        "reproj_error": float(sum(errors) / len(errors)),
-        "mean_track_length": float(sum(track_lengths) / len(track_lengths)),
-        "n_points3D": int(n_points),
-        # Inlier ratio: COLMAP only keeps inlier matches in points3D, so use
-        # registered_images / total as a stand-in. ensemble.py treats this
-        # along with reproj_error.
-        "inlier_ratio": float(n_images / max(total_frames, 1)),
-    }
+    # Fallback: read uint64 counts from the binary headers directly.
+    try:
+        with open(sparse_dir / "images.bin", "rb") as f:
+            n_images = struct.unpack("<Q", f.read(8))[0]
+        with open(sparse_dir / "points3D.bin", "rb") as f:
+            n_points = struct.unpack("<Q", f.read(8))[0]
+        return {
+            "registered_images": int(n_images),
+            "reproj_error": -1,
+            "mean_track_length": -1,
+            "n_points3D": int(n_points),
+            "inlier_ratio": float(n_images / max(total_frames, 1)),
+        }
+    except Exception:
+        return {"registered_images": -1, "reproj_error": -1,
+                "mean_track_length": -1, "inlier_ratio": 0.5, "_fallback": True}
 
 
 def run(frames_dir: Path, out_dir: Path) -> StageResult:
