@@ -43,6 +43,12 @@ MAST3R_MODEL = os.environ.get(
 WIN_SIZE = int(os.environ.get("NUDORMS_MAST3R_WIN", "20"))
 INFER_SIZE = int(os.environ.get("NUDORMS_MAST3R_SIZE", "512"))
 
+# SGA writes per-pair torch.save zips and reads them back across the run.
+# On RunPod, /workspace is MooseFS (network FS) which races against torch's
+# zip reopen and corrupts files mid-run. Keep the cache on local disk by
+# default; override to point at fast SSD if local disk is tight.
+CACHE_ROOT = os.environ.get("NUDORMS_MAST3R_CACHE", "/tmp/nudorms_mast3r_cache")
+
 # Cap anchors written per frame so a 300-frame scan doesn't produce a
 # multi-million-point sparse model that bloats gsplat init.
 MAX_ANCHORS_PER_FRAME = 4000
@@ -119,7 +125,11 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
     if not pairs:
         return StageResult(False, {}, {}, failure_reason="no pairs formed")
 
-    cache_dir = out_dir / "sga_cache"
+    # Cache lives on local disk (NUDORMS_MAST3R_CACHE), keyed by an
+    # out_dir-derived name so concurrent runs don't collide. We deliberately
+    # do NOT put this under out_dir on /workspace — see the comment on
+    # CACHE_ROOT for the network-FS corruption story.
+    cache_dir = Path(CACHE_ROOT) / f"sga_{out_dir.name}"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     try:
