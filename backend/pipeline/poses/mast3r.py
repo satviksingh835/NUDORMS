@@ -185,8 +185,9 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
     )
     rec.add_camera(camera)
 
-    # Per-image extrinsics. cam_from_world = inv(cam2w).
-    image_points2D: dict[int, list[tuple[float, float, int]]] = {}
+    # Per-image extrinsics. cam_from_world = inv(cam2w). Pycolmap 4.x makes
+    # cam_from_world (and points2D) read-only on Image, so everything has to
+    # go through the constructor.
     for i in range(n_imgs):
         cam2w = cam2w_all[i]
         w2c = np.linalg.inv(cam2w)
@@ -199,15 +200,15 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             image_id=i + 1,
             name=Path(image_paths[i]).name,
             camera_id=1,
+            cam_from_world=rigid,
         )
-        image.cam_from_world = rigid
         rec.add_image(image)
-        image_points2D[i + 1] = []
+        rec.register_image(i + 1)
 
-    # Project per-image sparse anchors into 2D, register points3D with
-    # length-1 tracks. Tracks are short because SGA's per-image anchors
-    # don't come pre-linked across views — gsplat's init only needs the
-    # 3D positions + colors, so this is sufficient for downstream.
+    # Add SGA's per-image sparse anchors as points3D for splat init. We skip
+    # populating image.points2D and per-point Tracks: gsplat's COLMAP loader
+    # uses points3D xyz/rgb to seed gaussians and doesn't need 2D-3D back-
+    # references for SfM init. Empty Track keeps the binary writer happy.
     for i in range(n_imgs):
         pts = pts3d_all[i]
         cols = colors_all[i]
@@ -219,60 +220,23 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             pts = pts[sel]
             cols = cols[sel]
 
-        # Project into image i (using the *resized* intrinsics K_resized
-        # because pts2d at true_shape are easy; then scale to original).
+        # Drop points behind the camera (cleans up SGA outliers).
         cam2w = cam2w_all[i]
         w2c = np.linalg.inv(cam2w)
-        cam_pts = (w2c[:3, :3] @ pts.T + w2c[:3, 3:4]).T   # [Mi, 3]
-        z = cam_pts[:, 2]
-        valid = z > 1e-3
+        cam_z = (w2c[:3, :3] @ pts.T + w2c[:3, 3:4])[2]
+        valid = cam_z > 1e-3
         if not valid.any():
             continue
-        cam_pts = cam_pts[valid]
         pts = pts[valid]
         cols = cols[valid]
 
-        K = intrinsics_all[i]
-        proj = (K @ cam_pts.T).T
-        uv_resized = proj[:, :2] / proj[:, 2:3]            # in true_shape px
-        uv = uv_resized * np.array([sx, sy])               # in original px
-
-        # Filter to those falling within original frame bounds (tiny margin).
-        in_frame = ((uv[:, 0] >= 0) & (uv[:, 0] < W_orig) &
-                    (uv[:, 1] >= 0) & (uv[:, 1] < H_orig))
-        if not in_frame.any():
-            continue
-        uv = uv[in_frame]
-        pts = pts[in_frame]
-        cols = cols[in_frame]
-
         rgb = np.clip(np.asarray(cols) * 255.0, 0, 255).astype(np.uint8)
-
         for m in range(pts.shape[0]):
-            track = pycolmap.Track()
-            point2D_idx = len(image_points2D[i + 1])
-            track.add_element(
-                pycolmap.TrackElement(image_id=i + 1, point2D_idx=point2D_idx)
-            )
-            p3d_id = rec.add_point3D(
+            rec.add_point3D(
                 xyz=pts[m].astype(np.float64),
-                track=track,
+                track=pycolmap.Track(),
                 color=rgb[m],
             )
-            image_points2D[i + 1].append((float(uv[m, 0]), float(uv[m, 1]), p3d_id))
-
-    # Attach points2D to each image and register the image as posed.
-    for i in range(n_imgs):
-        pts_list = image_points2D.get(i + 1, [])
-        img = rec.images[i + 1]
-        if pts_list:
-            xys = np.array([[u, v] for (u, v, _) in pts_list], dtype=np.float64)
-            p3d_ids = np.array([pid for (_, _, pid) in pts_list], dtype=np.int64)
-            img.points2D = pycolmap.ListPoint2D([
-                pycolmap.Point2D(xy=xys[k], point3D_id=int(p3d_ids[k]))
-                for k in range(len(pts_list))
-            ])
-        rec.register_image(i + 1)
 
     # Write cameras.bin / images.bin / points3D.bin to sparse/0/.
     sparse_0 = out_dir / "sparse" / "0"
