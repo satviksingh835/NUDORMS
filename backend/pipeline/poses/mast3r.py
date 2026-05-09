@@ -71,10 +71,49 @@ def _load_model(device: str):
     return _model_cache
 
 
-def _quat_xyzw_from_R(R: np.ndarray) -> np.ndarray:
-    """3x3 rotation -> quaternion in [x, y, z, w] (pycolmap convention)."""
+def _quat_wxyz_from_R(R: np.ndarray) -> np.ndarray:
+    """3x3 rotation -> quaternion in [w, x, y, z] (COLMAP binary convention)."""
     from scipy.spatial.transform import Rotation as ScipyR
-    return ScipyR.from_matrix(R).as_quat().astype(np.float64)
+    xyzw = ScipyR.from_matrix(R).as_quat()
+    return np.array([xyzw[3], xyzw[0], xyzw[1], xyzw[2]], dtype=np.float64)
+
+
+def _write_colmap_binary(
+    sparse_0: Path,
+    camera_params: dict,       # {id, model_id, w, h, params[fx,fy,cx,cy]}
+    images: list[dict],        # [{id, name, qvec[4], tvec[3], cam_id}]
+    points3d: list[dict],      # [{xyz[3], rgb[3]}]
+) -> None:
+    """Write cameras.bin / images.bin / points3D.bin without pycolmap."""
+    import struct
+
+    # cameras.bin
+    with open(sparse_0 / "cameras.bin", "wb") as f:
+        f.write(struct.pack("<Q", 1))  # num_cameras
+        c = camera_params
+        f.write(struct.pack("<IiQQ", c["id"], c["model_id"], c["w"], c["h"]))
+        f.write(struct.pack(f"<{len(c['params'])}d", *c["params"]))
+
+    # images.bin
+    with open(sparse_0 / "images.bin", "wb") as f:
+        f.write(struct.pack("<Q", len(images)))
+        for img in images:
+            f.write(struct.pack("<I", img["id"]))
+            f.write(struct.pack("<4d", *img["qvec"]))
+            f.write(struct.pack("<3d", *img["tvec"]))
+            f.write(struct.pack("<I", img["cam_id"]))
+            f.write(img["name"].encode() + b"\x00")
+            f.write(struct.pack("<Q", 0))  # num_points2D = 0
+
+    # points3D.bin
+    with open(sparse_0 / "points3D.bin", "wb") as f:
+        f.write(struct.pack("<Q", len(points3d)))
+        for pid, pt in enumerate(points3d, start=1):
+            f.write(struct.pack("<Q", pid))
+            f.write(struct.pack("<3d", *pt["xyz"]))
+            f.write(struct.pack("<3B", *pt["rgb"]))
+            f.write(struct.pack("<d", 0.0))   # error
+            f.write(struct.pack("<Q", 0))     # track_length = 0
 
 
 def run(frames_dir: Path, out_dir: Path) -> StageResult:
@@ -86,13 +125,12 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
 
     try:
         import torch  # noqa: F401
-        import pycolmap
         from mast3r.cloud_opt.sparse_ga import sparse_global_alignment
         from mast3r.image_pairs import make_pairs
         from dust3r.utils.image import load_images
     except ImportError as e:
         return StageResult(False, {}, {},
-                           failure_reason=f"mast3r/dust3r/pycolmap not importable: {e}")
+                           failure_reason=f"mast3r/dust3r not importable: {e}")
 
     frames = sorted(frames_dir.glob("*.jpg"))
     total_frames = len(frames)
@@ -159,15 +197,11 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
     if n_imgs != total_frames:
         log.warning("SGA returned %d poses for %d frames", n_imgs, total_frames)
 
-    # ---- Build COLMAP sparse model ----
-    rec = pycolmap.Reconstruction()
+    # ---- Build COLMAP sparse model (written manually — no pycolmap version dep) ----
 
     # Single shared camera (PINHOLE: fx, fy, cx, cy) at original resolution.
-    # SGA writes the same K into every intrinsics[i] when shared_intrinsics=True,
-    # so any index works.
     K_resized = intrinsics_all[0]
     H_res, W_res = int(true_shapes[0][0]), int(true_shapes[0][1])
-    # All originals are same-resolution video frames; use the first.
     W_orig, H_orig = orig_sizes[0]
     sx = W_orig / W_res
     sy = H_orig / H_res
@@ -176,38 +210,21 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
     cx = float(K_resized[0, 2]) * sx
     cy = float(K_resized[1, 2]) * sy
 
-    camera = pycolmap.Camera(
-        model="PINHOLE",
-        width=W_orig,
-        height=H_orig,
-        params=[fx, fy, cx, cy],
-        camera_id=1,
-    )
-    # Pycolmap 4.x stores pose on a Frame, not on Image. Use the trivial-rig
-    # helper so each image gets its own frame_id == image_id, and pass the
-    # pose through add_image_with_trivial_frame's two-arg overload (which
-    # also registers the frame).
-    rec.add_camera_with_trivial_rig(camera)
+    cam_entry = {"id": 1, "model_id": 1, "w": W_orig, "h": H_orig,
+                 "params": [fx, fy, cx, cy]}
 
+    img_entries = []
     for i in range(n_imgs):
-        cam2w = cam2w_all[i]
-        w2c = np.linalg.inv(cam2w)
-        R = w2c[:3, :3]
-        t = w2c[:3, 3]
-        rotation = pycolmap.Rotation3d(_quat_xyzw_from_R(R))
-        rigid = pycolmap.Rigid3d(rotation=rotation, translation=t.astype(np.float64))
+        w2c = np.linalg.inv(cam2w_all[i])
+        img_entries.append({
+            "id": i + 1,
+            "name": Path(image_paths[i]).name,
+            "qvec": _quat_wxyz_from_R(w2c[:3, :3]),
+            "tvec": w2c[:3, 3].astype(np.float64),
+            "cam_id": 1,
+        })
 
-        image = pycolmap.Image(
-            image_id=i + 1,
-            name=Path(image_paths[i]).name,
-            camera_id=1,
-        )
-        rec.add_image_with_trivial_frame(image, rigid)
-
-    # Add SGA's per-image sparse anchors as points3D for splat init. We skip
-    # populating image.points2D and per-point Tracks: gsplat's COLMAP loader
-    # uses points3D xyz/rgb to seed gaussians and doesn't need 2D-3D back-
-    # references for SfM init. Empty Track keeps the binary writer happy.
+    pt_entries = []
     for i in range(n_imgs):
         pts = pts3d_all[i]
         cols = colors_all[i]
@@ -219,36 +236,23 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             pts = pts[sel]
             cols = cols[sel]
 
-        # Drop points behind the camera (cleans up SGA outliers).
-        cam2w = cam2w_all[i]
-        w2c = np.linalg.inv(cam2w)
+        w2c = np.linalg.inv(cam2w_all[i])
         cam_z = (w2c[:3, :3] @ pts.T + w2c[:3, 3:4])[2]
         valid = cam_z > 1e-3
         if not valid.any():
             continue
         pts = pts[valid]
-        cols = cols[valid]
-
-        rgb = np.clip(np.asarray(cols) * 255.0, 0, 255).astype(np.uint8)
+        cols = np.clip(np.asarray(cols[valid]) * 255.0, 0, 255).astype(np.uint8)
         for m in range(pts.shape[0]):
-            rec.add_point3D(
-                xyz=pts[m].astype(np.float64),
-                track=pycolmap.Track(),
-                color=rgb[m],
-            )
+            pt_entries.append({"xyz": pts[m].astype(np.float64), "rgb": cols[m]})
 
-    # Write cameras.bin / images.bin / points3D.bin to sparse/0/.
     sparse_0 = out_dir / "sparse" / "0"
     sparse_0.mkdir(parents=True, exist_ok=True)
-    try:
-        rec.write_binary(str(sparse_0))
-    except AttributeError:
-        # Older pycolmap exposes this as `write` without _binary suffix.
-        rec.write(str(sparse_0))
+    _write_colmap_binary(sparse_0, cam_entry, img_entries, pt_entries)
 
     if not (sparse_0 / "cameras.bin").exists():
         return StageResult(False, {}, {},
-                           failure_reason="pycolmap wrote no sparse model")
+                           failure_reason="binary write produced no cameras.bin")
 
     metrics = _read_sparse_metrics(sparse_0, total_frames)
     return StageResult(
