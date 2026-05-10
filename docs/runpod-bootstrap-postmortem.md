@@ -268,7 +268,7 @@ date — most of these will bite again on the next pod or next variant.
   `os.environ.get(...)` it reads, so a stale env shows up immediately
   instead of silently breaking auto-stop or chunk size.
 
-### 24. Unhandled exception in pipeline leaves scan in inconsistent state
+### 24. Unhandled exception in pipeline leaves scan in inconsistent state — **FIXED**
 - **Symptom:** The gsplat TypeError (entry 22) crashed the celery task
   cleanly (Celery logged the traceback) but `scan.status` stayed at
   `training` with `scan.error=None`. The `tempfile.TemporaryDirectory`
@@ -277,26 +277,46 @@ date — most of these will bite again on the next pod or next variant.
 - **Cause:** `_set_status()` is only called at *successful* stage
   transitions. There's no top-level `try/except` in `run_pipeline()`
   that records `status=FAILED` + a stringified traceback into the DB.
-- **Fix (partial):** None applied yet — relying on the gsplat fix to
-  prevent the specific case. Real fix is to wrap `run_pipeline()`'s
-  body in a `try/except` that calls `_set_status(scan_id, FAILED,
-  error=str(e))` before re-raising.
+- **Fix:** Wrapped `run_pipeline()`'s body in `try/except Exception as exc`
+  that calls `_set_status(scan_id, ScanStatus.FAILED, error=str(exc)[:2000])`
+  before re-raising. Now any unhandled crash surfaces in the DB and API
+  within seconds instead of silently sitting at `status=training`.
 - **Lesson:** "Failure visibility" is half the value of a status table.
   Silent training-stage death looks identical to "still running" to the
   user; explicit FAILED with an error message is a much better experience.
-  Adding to open-issue list as **Q**.
 
-### 25. `MCMCStrategy.step_post_backward()` no longer accepts `packed` kwarg (gsplat 1.5.3)
+### 25. `MCMCStrategy.step_post_backward()` no longer accepts `packed` kwarg (gsplat 1.5.3) — **FIXED**
 - **Symptom:** Training crashed after the 80-second CUDA JIT compile step with
   `TypeError: MCMCStrategy.step_post_backward() got an unexpected keyword argument 'packed'`.
   The task had already spent ~40 min on MASt3R + VGGT + priors before this hit.
+  Crash happened at step 0 — zero training iterations completed.
 - **Cause:** gsplat 1.5.3 removed the `packed=` parameter from
   `MCMCStrategy.step_post_backward()`. Our training loop still passed `packed=False`.
-- **Fix:** Remove `packed=False` from the `step_post_backward()` call in
-  `gsplat_mcmc.py` line 565.
+- **Fix:** Removed `packed=False` from the `step_post_backward()` call in
+  `gsplat_mcmc.py`. SCP'd directly to the pod (couldn't git push in-session).
 - **Lesson:** After every gsplat version bump, check both `rasterization()` (the
   render call) and `MCMCStrategy` for removed/renamed parameters — they're the two
-  most-changed APIs between minor versions.
+  most-changed APIs between minor versions. Pin the gsplat version in `pyproject.toml`.
+
+### 26. Crash after 40-min pose stage forces full re-run due to tempfile cleanup — **FIXED**
+- **Symptom:** Entry 25's training crash caused `tempfile.TemporaryDirectory.__exit__`
+  to delete `/tmp/scan-<id>-<random>/` on exception unwind. The next task invocation
+  re-ran the full pipeline from scratch — another 40-min MASt3R SGA wait before
+  hitting training again.
+- **Cause:** `tempfile.TemporaryDirectory` always cleans up in `__exit__`, whether
+  the body succeeded or raised. Pose artifacts (frames, COLMAP sparse model, SGA
+  cache output) lived inside the temp dir and were wiped on every crash.
+- **Fix:**
+  1. Replaced `TemporaryDirectory` with a persistent named dir:
+     `workdir = Path(tempfile.gettempdir()) / f"scan-{scan_id}"` — survives crashes.
+  2. Added checkpoint files `_ckpt_frames.json`, `_ckpt_poses.json`, `_ckpt_priors.json`
+     written after each slow stage succeeds. On re-run, if the checkpoints exist,
+     the orchestrator loads them and jumps directly to training, skipping QC + frames +
+     posing + priors (~40 min saved per retry).
+  3. Workdir is cleaned up (`shutil.rmtree`) only on successful pipeline completion.
+- **Lesson:** For any stage that takes >5 min, always write artifacts to a
+  content-addressed path that survives the process lifetime. Never put expensive
+  intermediate outputs inside a `TemporaryDirectory`.
 
 ---
 
@@ -325,7 +345,22 @@ date — most of these will bite again on the next pod or next variant.
   `/`, `/tmp`, `/usr/local/bin` are container disk and get wiped when
   the pod is stopped/upgraded.
 - **The MASt3R SGA cache is the worst single offender** for pod disk
-  budgeting. ~150 GB at 152 frames + WIN=10 + SUBSAMPLE=16. Plan for it.
+  budgeting. ~150 GB at 300 frames + WIN=10 + SUBSAMPLE=16. Plan for it.
+- **Never use `TemporaryDirectory` for stages that take >5 min.** Use a
+  content-addressed path under `/tmp/scan-{id}/` with checkpoint files.
+  Otherwise a single training crash forces a full 40-min pose re-run.
+- **MASt3R's internal 300-step SGA optimization looks like training in tqdm.**
+  The progress bar shows `lr=` and `loss=` fields. Don't confuse this with
+  the gsplat training loop (which shows 30000 steps). Training starts *after*
+  MASt3R finishes. The "final loss = 0.35" and "Final focal = 409.84" lines
+  are MASt3R focal-length optimization output, not gsplat loss.
+- **gsplat CUDA extension JIT-compiles once and caches.** First call takes
+  ~80 seconds (`torch.utils.cpp_extension` writes to `~/.cache/torch_extensions`).
+  Subsequent runs within the same container are instant. Container disk wipes
+  clear the cache; `/workspace` does not persist it (it's not on the volume).
+- **Two gsplat API families change together on every minor version:**
+  `rasterization()` keyword args and `MCMCStrategy` method signatures.
+  After any `pip install --upgrade gsplat`, grep for both and re-check.
 
 ---
 
@@ -442,12 +477,17 @@ end-to-end despite them but quality / cost / reliability all suffer.
 ### J. MASt3R SGA cache cleanup between runs
 - **Status:** Cache at `/tmp/nudorms_mast3r_cache/<scan_id>` accumulates
   ~150 GB per scan and is never cleaned up. Eventually fills the
-  container disk again.
-- **Fix needed:** Either
-  - Use a workdir-scoped path that gets removed when the temp dir does
-    (move into `/tmp/scan-<id>/sga_cache/`), or
-  - Add a cleanup at end of pose stage: `rm -rf /tmp/nudorms_mast3r_cache/<scan_id>`.
-- **Impact:** Long-running pod will hit disk-full again after ~3–4 scans.
+  container disk again. The persistent-workdir change (entry 26) made
+  the workdir itself survive, but the SGA cache is still a separate path.
+- **Fix needed:**
+  - Move `NUDORMS_MAST3R_CACHE` into the per-scan workdir:
+    `NUDORMS_MAST3R_CACHE = str(workdir / "sga_cache")` before calling
+    `pose_ensemble.run()`. It'll be cleaned up on success (`shutil.rmtree(workdir)`)
+    and kept for inspection on failure.
+  - Or: add `rm -rf /tmp/nudorms_mast3r_cache/<scan_id>` at the end of
+    `poses/mast3r.py` after the COLMAP binary export succeeds.
+- **Impact:** Long-running pod hits disk-full after ~1 scan at 300 frames
+  (250 GB container disk, ~150 GB SGA cache per scan).
 
 ### K. End-to-end smoke test
 - **Status:** Only `scripts/smoke_cpu_stages.py` exists (QC + frame
@@ -516,17 +556,33 @@ end-to-end despite them but quality / cost / reliability all suffer.
 - **Impact:** Every scan currently pays the MASt3R fallback time (~38
   min on 152 frames at WIN=10). VGGT promised ~30 sec.
 
-### Q. Unhandled pipeline exceptions don't update scan status
+### Q. Unhandled pipeline exceptions don't update scan status — **PARTIALLY FIXED**
 - **Status:** When the gsplat `anti_aliased` TypeError crashed training
   (entry 22), the celery task died but `scan.status` stayed at `training`
-  with `scan.error=None`, and the workdir got wiped by tempfile cleanup.
-  Looked indistinguishable from "still running" to anyone polling the
-  API. The user only realized something was wrong because the GPU dropped
-  to 0%.
-- **Fix needed:** Wrap `run_pipeline()`'s body in a top-level try/except
-  that calls `_set_status(scan_id, ScanStatus.FAILED, error=traceback)`
-  before re-raising. Also `task_acks_late=True` already requeues on
-  worker death, but if the same code crashes again it just loops — bound
-  to N retries via `task.retry(max_retries=N)`.
-- **Impact:** Failure visibility. Today, "still running" and "crashed
-  10 minutes ago" look the same in the API.
+  with `scan.error=None`. The user only realized something was wrong because
+  the GPU dropped to 0%.
+- **Fix applied:** `run_pipeline()` now has a top-level `except Exception as exc`
+  that calls `_set_status(scan_id, ScanStatus.FAILED, error=str(exc)[:2000])`
+  before re-raising. Any Python exception now surfaces in `scan.error` within
+  seconds. Verified by the entry-25 crash sequence.
+- **Remaining gap:** `task_acks_late=True` means Celery will requeue the task
+  if the *worker process* dies (OOM kill, pod eviction). If the same code
+  crashes again it just loops forever. Should add `task.retry(max_retries=2)`
+  or a `task_reject_on_worker_lost=True` + dead-letter queue.
+- **Impact:** Individual Python exceptions now visible. Worker-death restarts
+  still silent.
+
+### R. Persistent workdir checkpoint files not invalidated when code changes
+- **Status:** Entry 26 introduced `_ckpt_poses.json`, `_ckpt_frames.json`,
+  `_ckpt_priors.json` to skip re-running expensive stages on re-dispatch.
+  But if the pipeline code changes (e.g. a new env var changes MASt3R behavior,
+  or a priors bug is fixed), re-dispatching the same scan_id will silently
+  use stale checkpoint artifacts from the old run.
+- **Fix needed:** Include a version hash (e.g. `NUDORMS_PIPELINE_VERSION` env var,
+  bumped manually on breaking changes) in the checkpoint file. On re-run, if the
+  version doesn't match, delete the checkpoint and re-run the stage. Or: add
+  a `force_restart=True` flag to the Celery task args that wipes the workdir
+  before starting.
+- **Impact:** After a pipeline code fix, you have to manually `rm -rf /tmp/scan-<id>/`
+  on the pod to force a clean re-run, or the checkpoint will replay the old (buggy)
+  artifacts into training.
