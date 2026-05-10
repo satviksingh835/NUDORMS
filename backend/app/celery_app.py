@@ -24,7 +24,25 @@ celery.conf.update(
 
 @celery.task(name="pipeline.run", bind=True)
 def run_pipeline_task(self, scan_id: str, imu_key: str | None = None) -> dict:
-    """Entry point for the GPU worker. Delegates to the orchestrator."""
-    from pipeline.orchestrator import run_pipeline
+    """Entry point for the GPU worker. Delegates to the orchestrator.
 
-    return run_pipeline(scan_id, task=self, imu_key=imu_key)
+    If NUDORMS_AUTO_STOP_POD=1 is set in the env, the pod stops itself
+    via RunPod API after the scan reaches a terminal state (READY,
+    FAILED, NEEDS_RECAPTURE) — useful for overnight runs.
+    """
+    from pipeline.orchestrator import run_pipeline
+    from pipeline.auto_stop import auto_stop_enabled, stop_pod_self
+
+    try:
+        result = run_pipeline(scan_id, task=self, imu_key=imu_key)
+    except Exception:
+        if auto_stop_enabled():
+            stop_pod_self(reason="pipeline_exception")
+        raise
+
+    if auto_stop_enabled():
+        # Always stop on terminal state, regardless of READY/FAILED/NEEDS_RECAPTURE.
+        # The user wants the pod to power down so they don't pay for idle hours.
+        stop_pod_self(reason=f"scan_{result.get('status', 'unknown')}")
+
+    return result
