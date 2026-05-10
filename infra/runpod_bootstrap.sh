@@ -65,8 +65,10 @@ if ! command -v glomap >/dev/null; then
   # FETCH_COLMAP=OFF makes GLOMAP use the system COLMAP we just installed,
   # instead of git-cloning + rebuilding all of COLMAP again (~15 min savings,
   # plus avoids re-downloading the ~500MB onnxruntime tarball a second time).
+  # FETCH_POSELIB stays ON because COLMAP only links PoseLib statically and
+  # doesn't install its CMake config files system-wide.
   cmake -S /tmp/glomap -B /tmp/glomap/build -GNinja -DCMAKE_BUILD_TYPE=Release \
-    -DFETCH_COLMAP=OFF -DFETCH_POSELIB=OFF \
+    -DFETCH_COLMAP=OFF \
     -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
   cmake --build /tmp/glomap/build --target install -j"$(nproc)"
 fi
