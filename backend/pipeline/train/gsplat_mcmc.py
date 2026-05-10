@@ -562,7 +562,7 @@ def run(scan_id: str, workdir: Path, pose_artifacts: dict,
         for opt in optimizers.values():
             opt.step()
             opt.zero_grad(set_to_none=True)
-        strategy.step_post_backward(splats, optimizers, strategy_state, step, info, packed=False)
+        strategy.step_post_backward(splats, optimizers, strategy_state, step, info)
 
         losses_window.append(loss.item())
         if len(losses_window) > 200:
