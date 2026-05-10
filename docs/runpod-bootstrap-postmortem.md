@@ -101,11 +101,16 @@ date — most of these will bite again on the next pod or next variant.
 - **Fix (interim):** Force single-pass — bail with `failure_reason` if
   `total > CHUNK_SIZE`. Default `CHUNK_SIZE` raised to 400 to cover any
   reasonable casual capture.
-- **Fix (proper):** Load model + inputs in `bfloat16` so 100+ frames fit
-  in 16 GB VRAM; `model.to(device, dtype=torch.bfloat16)` halves weight
-  memory (~5 GB → ~2.5 GB on the 1B model).
+- **Fix (attempted, insufficient):** Load model + inputs in `bfloat16`
+  via `model.to(device, dtype=torch.bfloat16)` to halve weight memory
+  (~5 GB → ~2.5 GB). On the 16 GB A4000 with 152 frames at 224×224 in a
+  single pass, this **still OOMs** silently — the activations during
+  global self-attention dominate, not the weights. VGGT keeps failing
+  through to MASt3R on this hardware. See open-issue **P** for the next
+  step.
 - **Fix (long-term):** Multi-chunk pose merging via overlapping frames
-  + relative-pose chaining. Not yet implemented.
+  + relative-pose chaining. Or downsample the input frame set to ~80
+  before VGGT, since pose estimation doesn't need every keyframe.
 
 ### 12. MASt3R SGA cache fills container disk
 - **Symptom:** SUBSAMPLE=16 + 152 frames + sliding window pairs grew the
@@ -223,6 +228,63 @@ date — most of these will bite again on the next pod or next variant.
   REST `POST https://rest.runpod.io/v1/pods/{pod_id}/stop` with the same
   `Authorization: Bearer rpa_...` header. Not yet implemented; the user
   manually stops the pod in the meantime.
+
+---
+
+## More bugs found mid-pipeline
+
+### 22. `gsplat 1.5.3` renamed `anti_aliased=True` → `rasterize_mode='antialiased'`
+- **Symptom:** Mid-training crash:
+  `TypeError: rasterization() got an unexpected keyword argument 'anti_aliased'`.
+  Worker died, exception propagated past `_set_status()`, so `scan.error`
+  stayed None and the workdir was deleted by tempfile cleanup. From the
+  outside it looked like the pipeline silently froze at `status=training`.
+- **Cause:** gsplat 1.5+ replaced the `anti_aliased` flag (the old
+  Mip-Splatting toggle) with `rasterize_mode: Literal['classic',
+  'antialiased']`. The bootstrap installs whichever gsplat version pip
+  resolves to, so the API drift hit on the first run with a fresh pip.
+- **Fix:** Pass `rasterize_mode="antialiased" if cfg.use_mip else "classic"`
+  in `gsplat_mcmc.py:run()` and same in `eval.py:run()`. Both call sites
+  found via `grep -n anti_aliased backend/pipeline/`.
+- **Lesson:** When pinning a fast-moving CV library, also pin its version
+  in `pyproject.toml`. Or wrap calls in a thin compat shim that adapts
+  on `inspect.signature(rasterization).parameters`.
+
+### 23. Stale `backend/.env` after pod-side env edits
+- **Symptom:** Edited `/tmp/nudorms_pod.env` to add `NUDORMS_AUTO_STOP_POD`,
+  `RUNPOD_API_KEY`, `RUNPOD_POD_ID`, and bump `NUDORMS_VGGT_CHUNK` from
+  100 to 400. Restarted the worker, but the new vars still showed as
+  MISSING in validation — `python-dotenv` had already loaded the OLD
+  `backend/.env` left over on the volume disk from a previous session.
+- **Cause:** Two env files exist and `python-dotenv`'s `load_dotenv()`
+  reads `backend/.env` regardless of what the SSH session sourced from
+  `/tmp/nudorms_pod.env`. The volume disk preserves `backend/.env` across
+  container wipes, so old values stick around.
+- **Fix:** Always `cp /tmp/nudorms_pod.env /workspace/nudorms/backend/.env`
+  after editing `/tmp/nudorms_pod.env`. Or eliminate the duplication by
+  pointing `load_dotenv()` at `/tmp/nudorms_pod.env` directly. Or move
+  to env vars baked into the pod template.
+- **Lesson:** Validation script (open issue **I**) should print every
+  `os.environ.get(...)` it reads, so a stale env shows up immediately
+  instead of silently breaking auto-stop or chunk size.
+
+### 24. Unhandled exception in pipeline leaves scan in inconsistent state
+- **Symptom:** The gsplat TypeError (entry 22) crashed the celery task
+  cleanly (Celery logged the traceback) but `scan.status` stayed at
+  `training` with `scan.error=None`. The `tempfile.TemporaryDirectory`
+  context manager also wiped `/tmp/scan-<id>/`, so even the work-in-flight
+  artifacts were gone.
+- **Cause:** `_set_status()` is only called at *successful* stage
+  transitions. There's no top-level `try/except` in `run_pipeline()`
+  that records `status=FAILED` + a stringified traceback into the DB.
+- **Fix (partial):** None applied yet — relying on the gsplat fix to
+  prevent the specific case. Real fix is to wrap `run_pipeline()`'s
+  body in a `try/except` that calls `_set_status(scan_id, FAILED,
+  error=str(e))` before re-raising.
+- **Lesson:** "Failure visibility" is half the value of a status table.
+  Silent training-stage death looks identical to "still running" to the
+  user; explicit FAILED with an error message is a much better experience.
+  Adding to open-issue list as **Q**.
 
 ---
 
@@ -420,3 +482,39 @@ end-to-end despite them but quality / cost / reliability all suffer.
   And add to bootstrap.
 - **Impact:** Estimated 20–30% speedup on MASt3R pose stage. Today's run
   is paying the slow-path cost (~38 min instead of ~28 min).
+
+### P. VGGT silently OOMs on 16 GB VRAM even with bf16 weights
+- **Status:** With `model.to(device, dtype=torch.bfloat16)` and
+  `inputs.to(dtype=torch.bfloat16)`, VGGT 1B forward pass on 152 frames
+  at 224×224 still fails in ~2 seconds. Failure caught by the try/except
+  in `vggt.py`, returned as `StageResult(ok=False)`, ensemble falls
+  through to MASt3R.
+- **Cause:** The bf16 fix halves *weight* memory (~5 → ~2.5 GB) but
+  doesn't help with global self-attention activations across N frames,
+  which dominate VRAM at this scale.
+- **Fix needed (any of):**
+  1. **Frame subsampling** — pose estimation doesn't need 152 keyframes;
+     stride down to ~80 evenly spaced frames before VGGT.
+  2. **Memory-efficient attention** — flash-attn or xformers backend
+     within VGGT, if supported by `vggt/models/vggt.py`.
+  3. **Multi-chunk pose merging** — process in 80-frame chunks with
+     5-frame overlap, then chain relative poses (entry **E**).
+  4. **Smaller VGGT variant** — only `vggt-1B` is on HF today; if/when
+     a `vggt-base` ships, use it.
+- **Impact:** Every scan currently pays the MASt3R fallback time (~38
+  min on 152 frames at WIN=10). VGGT promised ~30 sec.
+
+### Q. Unhandled pipeline exceptions don't update scan status
+- **Status:** When the gsplat `anti_aliased` TypeError crashed training
+  (entry 22), the celery task died but `scan.status` stayed at `training`
+  with `scan.error=None`, and the workdir got wiped by tempfile cleanup.
+  Looked indistinguishable from "still running" to anyone polling the
+  API. The user only realized something was wrong because the GPU dropped
+  to 0%.
+- **Fix needed:** Wrap `run_pipeline()`'s body in a top-level try/except
+  that calls `_set_status(scan_id, ScanStatus.FAILED, error=traceback)`
+  before re-raising. Also `task_acks_late=True` already requeues on
+  worker death, but if the same code crashes again it just loops — bound
+  to N retries via `task.retry(max_retries=N)`.
+- **Impact:** Failure visibility. Today, "still running" and "crashed
+  10 minutes ago" look the same in the API.
