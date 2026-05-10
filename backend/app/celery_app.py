@@ -23,8 +23,8 @@ celery.conf.update(
 
 
 @celery.task(name="pipeline.run", bind=True)
-def run_pipeline_task(self, scan_id: str) -> dict:
+def run_pipeline_task(self, scan_id: str, imu_key: str | None = None) -> dict:
     """Entry point for the GPU worker. Delegates to the orchestrator."""
     from pipeline.orchestrator import run_pipeline
 
-    return run_pipeline(scan_id, task=self)
+    return run_pipeline(scan_id, task=self, imu_key=imu_key)
