@@ -76,16 +76,18 @@ pip install -e ./backend[gpu]
 
 # MASt3R-SfM: learned pose estimation that replaces COLMAP on casual captures.
 # Clone once; skip if already present (pod restart or baked template).
+# MASt3R/dust3r have no setup.py — they're imported via PYTHONPATH (set below).
 if [ ! -d /workspace/mast3r ]; then
   git clone --recursive https://github.com/naver/mast3r /workspace/mast3r
-  pip install -r /workspace/mast3r/dust3r/requirements.txt
-  pip install -r /workspace/mast3r/dust3r/requirements_optional.txt
-  pip install -r /workspace/mast3r/requirements.txt
-  # kapture + kapture-localization: required by mast3r/colmap/mapping.py
-  pip install kapture kapture-localization
-  # install mast3r package itself so `from mast3r.model import ...` resolves
-  pip install -e /workspace/mast3r
 fi
+# Always run requirement installs in case the previous run failed midway
+# (pip is fast when everything is already satisfied).
+pip install -r /workspace/mast3r/dust3r/requirements.txt
+pip install -r /workspace/mast3r/dust3r/requirements_optional.txt 2>/dev/null || \
+  echo "WARN: dust3r requirements_optional.txt failed — non-fatal"
+pip install -r /workspace/mast3r/requirements.txt
+# kapture + kapture-localization: required by mast3r/colmap/mapping.py
+pip install kapture kapture-localization
 
 # Model weights (~2 GB, ViT-Large 512). Download once, skip if cached.
 # Store outside the repo so a git checkout doesn't wipe them.
@@ -160,5 +162,7 @@ if ! command -v node >/dev/null; then
   apt-get install -y --no-install-recommends nodejs
 fi
 
-export PYTHONPATH=/workspace/nudorms/backend
+# PYTHONPATH wires the worker against the MASt3R + dust3r source trees
+# (no setup.py upstream) and against our backend package.
+export PYTHONPATH=/workspace/nudorms/backend:/workspace/mast3r:/workspace/mast3r/dust3r
 exec celery -A app.celery_app worker --loglevel=info -Q gpu --concurrency=1
