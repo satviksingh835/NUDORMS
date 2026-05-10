@@ -294,6 +294,14 @@ date — most of these will bite again on the next pod or next variant.
   `MCMCStrategy.step_post_backward()`. Our training loop still passed `packed=False`.
 - **Fix:** Removed `packed=False` from the `step_post_backward()` call in
   `gsplat_mcmc.py`. SCP'd directly to the pod (couldn't git push in-session).
+- **Second hit:** Even after SCP'ing the fix, the crash recurred on the very next
+  run. Root cause: Python had already compiled the old code to
+  `__pycache__/gsplat_mcmc.cpython-311.pyc` (mtime older than the SCP'd `.py`),
+  and the Celery forked worker process loaded the `.pyc` instead of recompiling.
+  Fix: `find /workspace/nudorms/backend -name "*.pyc" -delete` + worker restart
+  before re-dispatching. Verified by `strings <pyc> | grep packed` — the only
+  remaining hit is the legitimate `packed=False` in `rasterization()`, not
+  `step_post_backward()`.
 - **Lesson:** After every gsplat version bump, check both `rasterization()` (the
   render call) and `MCMCStrategy` for removed/renamed parameters — they're the two
   most-changed APIs between minor versions. Pin the gsplat version in `pyproject.toml`.
@@ -361,6 +369,23 @@ date — most of these will bite again on the next pod or next variant.
 - **Two gsplat API families change together on every minor version:**
   `rasterization()` keyword args and `MCMCStrategy` method signatures.
   After any `pip install --upgrade gsplat`, grep for both and re-check.
+- **Stale `.pyc` files silently win over SCP'd fixes.** Python loads `.pyc` if
+  its mtime is ≥ the `.py` file's mtime. SCP can land with a mtime older than
+  the compiled bytecode. Always `find . -name "*.pyc" -delete` + restart the
+  worker after patching a file in-place on the pod. Never assume the live code
+  changed just because the `.py` looks right.
+- **Clearing disk before a run matters.** After two crashed runs, `/tmp` held
+  82 GB of MASt3R SGA cache. Clearing it before re-dispatch freed 240 GB (250
+  GB container disk → 5% used). MASt3R refills it (~150 GB) every run.
+- **R2 roundtrip is the right connectivity test.** `list_keys` doesn't exist
+  on `app.storage`; use `put(key, b"ping")` + `get(key)` instead. Passes on
+  this pod with the current Cloudflare R2 creds.
+- **`npx --yes splat-transform` works without a pre-install.** Node 20 + npx
+  10 are on the RunPod image. `sogs.py` calls `npx --yes splat-transform` which
+  downloads the package on first use. No bootstrap step needed.
+- **`build-lod` (Spark LoD) is not on the pod** — `lod.py` falls back to an
+  importance-sampling tier split. LOD still gets uploaded to R2; the viewer just
+  doesn't get a proper streaming tree. Good enough for now.
 
 ---
 
@@ -583,6 +608,29 @@ end-to-end despite them but quality / cost / reliability all suffer.
   version doesn't match, delete the checkpoint and re-run the stage. Or: add
   a `force_restart=True` flag to the Celery task args that wipes the workdir
   before starting.
-- **Impact:** After a pipeline code fix, you have to manually `rm -rf /tmp/scan-<id>/`
-  on the pod to force a clean re-run, or the checkpoint will replay the old (buggy)
-  artifacts into training.
+- **Workaround (now):** `rm -rf /tmp/scan-<id>/` on the pod before re-dispatching
+  forces a clean re-run. Also clear `/tmp/nudorms_mast3r_cache` to reclaim the 82–150 GB
+  SGA cache from the previous attempt.
+- **Impact:** After a pipeline code fix, you must manually wipe the workdir or the
+  checkpoint will replay old (possibly buggy) artifacts into training.
+
+### S. MASt3R SGA cache grows to ~150 GB per run and is never auto-cleaned
+- **Status:** After two crashed runs the cache hit 82 GB. After a full 300-frame
+  run it will reach ~150 GB, leaving only ~90 GB free on a 250 GB container disk —
+  not enough for a second run.
+- **Why:** `NUDORMS_MAST3R_CACHE` defaults to `/tmp/nudorms_mast3r_cache` which is
+  outside the workdir and never cleaned by the success-path `shutil.rmtree(workdir)`.
+- **Fix needed:** In `orchestrator.py`, set `os.environ["NUDORMS_MAST3R_CACHE"]`
+  to `str(workdir / "sga_cache")` before calling `pose_ensemble.run()`. It then gets
+  cleaned on success and kept on failure for inspection.
+- **Impact:** Pod hits disk-full after 1 full run at 300 frames. Must manually
+  `rm -rf /tmp/nudorms_mast3r_cache` before each re-dispatch.
+
+### T. No `build-lod` (Spark LoD tree) on the pod
+- **Status:** `lod.py` falls back to importance-sampling tier split. The splat still
+  uploads to R2 and the viewer loads it, but without a proper streaming LoD tree
+  large scenes will stutter on slow connections.
+- **Fix needed:** Install Spark 2.0's `build-lod` CLI. No public binary yet —
+  needs to be built from `sparkjsdev/spark` or copied from a Spark release tarball.
+  Add to bootstrap once a stable download path exists.
+- **Impact:** LoD streaming not real; viewer loads full splat on all devices.
