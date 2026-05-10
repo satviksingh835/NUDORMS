@@ -3,7 +3,7 @@
 Stage 1 regularizers:
   - Scale regularization: penalises max/min scale ratio > 10 (needle killer).
   - Absolute scale cap: penalises max scale > 0.1 world units.
-  - Mip-Splatting: anti_aliased=True (3D smoothing + 2D Mip filter).
+  - Mip-Splatting: rasterize_mode='antialiased' (3D smoothing + 2D Mip filter).
   - Aggressive opacity culling: cull_alpha_thresh=0.005.
   - SH degree warm-up: degree 0→3 over first 3000 iterations.
 
@@ -488,7 +488,7 @@ def run(scan_id: str, workdir: Path, pose_artifacts: dict,
             near_plane=0.01,
             far_plane=1e10,
             absgrad=True,
-            anti_aliased=cfg.use_mip,   # Mip-Splatting
+            rasterize_mode="antialiased" if cfg.use_mip else "classic",  # Mip-Splatting
         )
         # When DropGaussian is active, info is for the kept subset — remap for strategy
         if keep is not None:

@@ -249,7 +249,7 @@ def run(scan_id: str, workdir: Path, train_artifacts: dict, pose_artifacts: dict
                     packed=False,
                     near_plane=0.01,
                     far_plane=1e10,
-                    anti_aliased=True,
+                    rasterize_mode="antialiased",
                 )
         except Exception as e:
             log.warning("rasterization failed for %s: %s", cam_info["name"], e)
