@@ -17,15 +17,21 @@ set -euo pipefail
 REF="${NUDORMS_REF:-main}"
 REPO="${NUDORMS_REPO:?NUDORMS_REPO not set}"
 
+# CUDA toolkit lives at /usr/local/cuda on RunPod images but isn't always on PATH.
+# COLMAP's cmake will fail with "CMAKE_CUDA_COMPILER could not be found" without this.
+export PATH="/usr/local/cuda/bin:${PATH}"
+export CUDACXX="/usr/local/cuda/bin/nvcc"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+
 apt-get update
 apt-get install -y --no-install-recommends \
-  git build-essential ninja-build pkg-config ffmpeg \
+  git build-essential ninja-build pkg-config ffmpeg curl ca-certificates \
   libboost-all-dev libeigen3-dev libceres-dev libfreeimage-dev \
   libgoogle-glog-dev libsuitesparse-dev libcgal-dev libgflags-dev \
   libopenimageio-dev libmetis-dev libsqlite3-dev openimageio-tools \
   libopenexr-dev libtiff-dev libpng-dev libjpeg-dev \
   libgl1-mesa-dev libglu1-mesa-dev libegl1-mesa-dev \
-  libglew-dev libopencv-dev
+  libglew-dev libopencv-dev libssl-dev libcurl4-openssl-dev
 
 # Newer cmake than Ubuntu 22.04 ships (faiss/colmap deps need >=3.24).
 pip install --upgrade "cmake>=3.28"
