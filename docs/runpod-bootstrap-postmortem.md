@@ -252,3 +252,171 @@ date — most of these will bite again on the next pod or next variant.
   the pod is stopped/upgraded.
 - **The MASt3R SGA cache is the worst single offender** for pod disk
   budgeting. ~150 GB at 152 frames + WIN=10 + SUBSAMPLE=16. Plan for it.
+
+---
+
+## Open / unresolved
+
+Things still broken or papered-over. Each is a real gap; the pipeline runs
+end-to-end despite them but quality / cost / reliability all suffer.
+
+### A. Auto-stop pod via RunPod REST API
+- **Status:** Disabled (`NUDORMS_AUTO_STOP_POD=0`). User stops the pod
+  manually after each run, paying for ~5–15 min of idle billing while
+  noticing the run is done.
+- **Why:** GraphQL `podStop` mutation in `auto_stop.py` returns 403 with
+  `rpa_*` keys (entry 21).
+- **Fix needed:** Switch `auto_stop.py` to
+  `POST https://rest.runpod.io/v1/pods/{pod_id}/stop` with the same
+  `Authorization: Bearer rpa_...` header. Verify the auth works with a
+  `GET /v1/pods/{pod_id}` first.
+- **Impact:** ~$0.10–0.30 per scan in idle billing.
+
+### B. Real Difix3D+ refinement loop
+- **Status:** `difix3d.available()` hardcoded to False.
+- **Why:** Upstream nv-tlabs/Difix3D ships an image-level diffusion CLI;
+  the full Difix3D+ flow needs render → diffuse-clean → distill back into
+  3DGS via fine-tuning (entry 14).
+- **Fix needed:** Wrapper that
+  1. Renders novel views from the trained PLY at, say, 16 random poses
+  2. Calls `inference_difix.py --input_image <rendered.png> --prompt "..." --output_dir ...`
+  3. Spawns a fine-tune subprocess that adds the cleaned views as
+     additional supervision and re-trains for ~5k iterations.
+- **Impact:** Plan doc claims ~2× FID improvement. Real but optional.
+
+### C. Real 2DGS / mesh stage
+- **Status:** Both stubs return `ok=False`. `mesh_key` is always None.
+- **Why:** Was punted; the splat is what users actually navigate.
+- **Fix needed:** TSDF-integrate the Depth Anything V2 priors with the
+  trained pose camera positions (Open3D's `ScalableTSDFVolume`), run
+  marching cubes, decimate to ~50k faces, RANSAC-align floor to z=0,
+  export glTF.
+- **Impact:** No floor plan / dimensions / AR placement / glTF fallback
+  for non-WebGL2 clients.
+
+### D. CUDA submodule installs for Scaffold-GS / PGSR / 3DGUT
+- **Status:** All three `available()` functions import-check the missing
+  CUDA exts and return False on this pod, so the orchestrator falls
+  through to gsplat MCMC + skip mesh.
+- **Why:** Bootstrap doesn't build `submodules/diff-gaussian-rasterization`,
+  `submodules/simple-knn`, `fused-ssim`, or fetch a working `pytorch3d`
+  wheel.
+- **Fix needed:**
+  ```bash
+  cd /workspace/Scaffold-GS && git submodule update --init --recursive
+  pip install ./submodules/diff-gaussian-rasterization ./submodules/simple-knn
+  pip install fused-ssim
+  pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+  ```
+  Each takes ~5 min to compile from source. Gate behind a flag because
+  failures are common on torch/CUDA combinations.
+- **Impact:** ~0.5 dB PSNR loss vs Scaffold-GS, no PGSR mesh, no 3DGUT
+  reflection handling.
+
+### E. VGGT multi-chunk pose merging for >400 frames
+- **Status:** Bails with `failure_reason` if `total > CHUNK_SIZE` (entry 11).
+- **Why:** Per-chunk poses live in independent coordinate frames; naively
+  concatenating gives nonsense.
+- **Fix needed:** Process overlapping chunks (e.g. 5-frame overlap),
+  compute the rigid transform aligning chunk 2's overlap frames to chunk
+  1's poses, apply to all of chunk 2. Or: pose-graph optimization across
+  chunk boundaries.
+- **Impact:** Captures with >400 keyframes silently fall through to
+  MASt3R (~10× slower). Today's 152-frame test6 fits, so unblocked.
+
+### F. Shared DB for Mac API + pod worker
+- **Status:** Each side has its own `nudorms.db` (`backend/nudorms.db` on
+  Mac, `/workspace/nudorms.db` on pod). Manually inserting the scan row
+  on the pod is the workaround (entry 19).
+- **Why:** No shared Postgres set up.
+- **Fix needed:** Free Neon Postgres → set `DATABASE_URL=postgres://...`
+  on both sides. Update bootstrap to install `psycopg2-binary` (it's
+  already in `pyproject.toml`).
+- **Impact:** Every scan needs a manual sync step right now. Production
+  blocker.
+
+### G. `init_db()` at celery worker boot
+- **Status:** SQLAlchemy connection pool caches an empty schema if the
+  DB file existed but had no tables when the worker started. Workaround
+  is to run `init_db()` from a separate Python script before booting the
+  worker (entry 18).
+- **Fix needed:** Call `init_db()` at module load in `app.celery_app`,
+  so it runs in every worker process before the connection pool warms up.
+  Or use `pool_pre_ping` + `pool_recycle` to force reconnect.
+- **Impact:** First scan after a fresh container disk requires a manual
+  init step.
+
+### H. Bootstrap container-disk size sentinel
+- **Status:** Hard-failed on the original 50 GB container disk because
+  the MASt3R SGA cache hit ~150 GB. User had to manually upsize to 250 GB.
+- **Fix needed:** First-line check in `runpod_bootstrap.sh`:
+  ```bash
+  free=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
+  [ "$free" -lt 200 ] && { echo "ERROR: need >=200 GB container disk"; exit 1; }
+  ```
+- **Impact:** Silent OOMs mid-run on undersized pods.
+
+### I. Pre-flight validation script committed to repo
+- **Status:** We ran the ~9 import + R2 + Redis + RunPod-API + disk
+  checks ad-hoc via SSH heredocs.
+- **Fix needed:** `backend/scripts/preflight.py` that the celery worker
+  runs at boot time before announcing ready, or that `runpod_bootstrap.sh`
+  invokes after deps are installed but before `exec celery worker`.
+- **Impact:** Each fresh pod requires manually re-deriving the validation
+  steps.
+
+### J. MASt3R SGA cache cleanup between runs
+- **Status:** Cache at `/tmp/nudorms_mast3r_cache/<scan_id>` accumulates
+  ~150 GB per scan and is never cleaned up. Eventually fills the
+  container disk again.
+- **Fix needed:** Either
+  - Use a workdir-scoped path that gets removed when the temp dir does
+    (move into `/tmp/scan-<id>/sga_cache/`), or
+  - Add a cleanup at end of pose stage: `rm -rf /tmp/nudorms_mast3r_cache/<scan_id>`.
+- **Impact:** Long-running pod will hit disk-full again after ~3–4 scans.
+
+### K. End-to-end smoke test
+- **Status:** Only `scripts/smoke_cpu_stages.py` exists (QC + frame
+  selection). No GPU-stages smoke test that runs on a tiny synthetic
+  scene.
+- **Fix needed:** A test that uses ~10 frames + tiny VGGT inference
+  + 100-iteration gsplat MCMC, asserts a PLY is produced. Saves a full
+  pod-bootstrap-and-test loop when iterating on pipeline code.
+- **Impact:** Discovering pipeline bugs costs ~30 min per iteration on
+  the pod; should cost ~30 sec locally with mocked GPU.
+
+### L. Frontend integration with new artifacts
+- **Status:** SplatViewer migrated to optional Spark 2.0 + mkkellogg
+  fallback, but the capture page hasn't been verified end-to-end with
+  the new IMU upload + multi-station guidance flow.
+- **Fix needed:** Manual end-to-end test on a phone, plus a `/demo`
+  page that loads a known-good `.splat` and verifies it renders.
+- **Impact:** Real-user capture flow not exercised.
+
+### M. Mac local API loads `.env` from CWD, not project root
+- **Status:** Running `uvicorn app.main:app` from `backend/` works because
+  `.env` is in CWD. Running from repo root or anywhere else picks up the
+  wrong env.
+- **Fix needed:** `load_dotenv(find_dotenv())` in `app/main.py` so the
+  CWD doesn't matter.
+- **Impact:** Surprise debugging when the wrong creds are used.
+
+### N. `pytorch3d` install path is brittle
+- **Status:** No matching wheel; pip falls back to source build which
+  needs CUDA + a long compile, often failing.
+- **Fix needed:** Detect torch + CUDA versions, pull the right
+  pre-built wheel from Facebook's release page (e.g.
+  `https://anaconda.org/pytorch3d/pytorch3d/...`). Or vendor a working
+  pip path in `requirements.txt`.
+- **Impact:** 3DGUT permanently unavailable until this is fixed.
+
+### O. RoPE2D CUDA kernel not compiled
+- **Status:** dust3r prints `Warning, cannot find cuda-compiled version of
+  RoPE2D, using a slow pytorch version instead`. Real cost on MASt3R SGA.
+- **Fix needed:** Build the CUDA op:
+  ```bash
+  cd /workspace/mast3r/dust3r/croco/models/curope && python setup.py build_ext --inplace
+  ```
+  And add to bootstrap.
+- **Impact:** Estimated 20–30% speedup on MASt3R pose stage. Today's run
+  is paying the slow-path cost (~38 min instead of ~28 min).
