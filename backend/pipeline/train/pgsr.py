@@ -32,8 +32,20 @@ DEFAULT_PGSR_DIR = "/workspace/pgsr"
 
 
 def available() -> bool:
+    """PGSR needs the diff-gaussian-rasterization + simple-knn CUDA submodules
+    plus fused-ssim, none of which the bootstrap currently builds. Returning
+    False here so the orchestrator skips PGSR and falls through to 2DGS / no
+    mesh, instead of launching a doomed subprocess that crashes mid-run."""
     d = Path(os.environ.get("NUDORMS_PGSR_DIR", DEFAULT_PGSR_DIR))
-    return (d / "train.py").exists()
+    if not (d / "train.py").exists():
+        return False
+    # Verify CUDA submodules are actually importable
+    try:
+        import diff_gaussian_rasterization  # noqa: F401
+        import simple_knn  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 def _find_mesh(model_path: Path) -> Path | None:

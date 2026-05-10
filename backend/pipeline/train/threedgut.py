@@ -32,8 +32,18 @@ DEFAULT_3DGUT_DIR = "/workspace/3DGUT"
 
 
 def available() -> bool:
+    """3DGUT/3DGRUT depends on pytorch3d, which doesn't build cleanly on
+    this pod's torch/CUDA combo. Verify pytorch3d is importable before
+    advertising the stage; otherwise the orchestrator skips it and falls
+    back to gsplat MCMC."""
     d = Path(os.environ.get("NUDORMS_3DGUT_DIR", DEFAULT_3DGUT_DIR))
-    return (d / "train.py").exists() or (d / "threedgut" / "train.py").exists()
+    if not ((d / "train.py").exists() or (d / "threedgut" / "train.py").exists()):
+        return False
+    try:
+        import pytorch3d  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 def _find_script(d: Path) -> Path | None:

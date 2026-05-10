@@ -40,15 +40,21 @@ MAX_POINTS_PER_FRAME = 2000   # subsample dense point map to keep sparse model c
 
 
 def _load_model(device: str):
+    """Load VGGT in bf16 to halve weight VRAM (~5 GB → ~2.5 GB on 1B model).
+
+    Activations still flow through the autocast(bfloat16) block in run(), so
+    the whole forward pass stays in bf16 — needed to fit 100+ frames on a
+    16 GB GPU like the RTX A4000.
+    """
+    import torch
     from vggt.models.vggt import VGGT
     log.info("loading VGGT from %s", VGGT_MODEL)
     if os.path.isfile(VGGT_MODEL):
-        import torch
         model = VGGT()
         model.load_state_dict(torch.load(VGGT_MODEL, map_location="cpu"))
     else:
         model = VGGT.from_pretrained(VGGT_MODEL)
-    return model.to(device).eval()
+    return model.to(device, dtype=torch.bfloat16).eval()
 
 
 def run(frames_dir: Path, out_dir: Path) -> StageResult:
@@ -100,7 +106,8 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
     all_colors: list[np.ndarray] = []      # [H*W, 3] uint8 RGB
 
     try:
-        imgs = load_and_preprocess_images(image_paths).to("cuda")  # [N, 3, H, W]
+        # bf16 cast halves activation memory and matches the bf16 model weights.
+        imgs = load_and_preprocess_images(image_paths).to("cuda", dtype=torch.bfloat16)
         infer_H, infer_W = imgs.shape[-2], imgs.shape[-1]
     except Exception as e:
         return StageResult(False, {}, {}, failure_reason=f"image preprocessing failed: {e}")

@@ -70,6 +70,20 @@ def run(scan_id: str, workdir: Path, pose_artifacts: dict,
                            "Set NUDORMS_SCAFFOLD_GS_DIR or run runpod_bootstrap.sh.",
         )
 
+    # Scaffold-GS depends on CUDA submodules (diff-gaussian-rasterization,
+    # simple-knn) that have to be built from source. If they aren't
+    # importable, fail fast so the orchestrator falls through to gsplat
+    # MCMC instead of paying ~2 min to spawn a subprocess that will crash
+    # at import time.
+    try:
+        import diff_gaussian_rasterization  # noqa: F401
+        import simple_knn  # noqa: F401
+    except ImportError as e:
+        return StageResult(
+            ok=False, metrics={}, artifacts={},
+            failure_reason=f"Scaffold-GS CUDA submodules missing: {e}",
+        )
+
     sparse_dir = Path(pose_artifacts.get("sparse_dir", ""))
     if not (sparse_dir / "cameras.bin").exists():
         return StageResult(False, {}, {}, failure_reason="cameras.bin missing from pose_artifacts")

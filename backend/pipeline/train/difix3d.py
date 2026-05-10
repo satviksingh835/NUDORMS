@@ -32,8 +32,18 @@ DEFAULT_DIFIX3D_DIR = "/workspace/Difix3D"
 
 
 def available() -> bool:
-    d = Path(os.environ.get("NUDORMS_DIFIX3D_DIR", DEFAULT_DIFIX3D_DIR))
-    return (d / "difix3d" / "infer.py").exists() or (d / "infer.py").exists()
+    """Always False until the full Difix3D+ refinement loop is implemented.
+
+    Upstream nv-tlabs/Difix3D ships an image-level diffusion model
+    (src/inference_difix.py) that takes 2D images, not a CLI that operates
+    on 3DGS PLYs. The full Difix3D+ flow requires:
+      1. render novel views from the trained 3DGS
+      2. run inference_difix.py on each rendered view
+      3. distill the cleaned views back into 3DGS via fine-tuning
+    That's a multi-step integration this wrapper doesn't yet implement, so
+    we tell the orchestrator the stage is unavailable and skip cleanly.
+    """
+    return False
 
 
 def _find_script(difix_dir: Path) -> Path | None:
