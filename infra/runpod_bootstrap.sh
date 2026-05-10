@@ -64,9 +64,22 @@ if ! command -v glomap >/dev/null; then
   git clone --depth=1 https://github.com/colmap/glomap /tmp/glomap
   # GLOMAP's CMakeLists expects upstream COLMAP/PoseLib targets that aren't
   # exposed by a plain `make install`, so we let it FetchContent both deps.
-  # ~15 min slower than reusing the system COLMAP, but reliable.
+  # FETCHCONTENT_SOURCE_DIR_<NAME> short-circuits the FetchContent download
+  # if the dirs are pre-staged at /workspace/_glomap_deps/* (saves 1+ hour
+  # of slow git fetches on this pod's network).
+  GLOMAP_DEPS_FLAGS=""
+  if [ -d /workspace/_glomap_deps/colmap ]; then
+    GLOMAP_DEPS_FLAGS+=" -DFETCHCONTENT_SOURCE_DIR_COLMAP=/workspace/_glomap_deps/colmap"
+  fi
+  if [ -d /workspace/_glomap_deps/poselib ]; then
+    GLOMAP_DEPS_FLAGS+=" -DFETCHCONTENT_SOURCE_DIR_POSELIB=/workspace/_glomap_deps/poselib"
+  fi
+  if [ -d /workspace/_glomap_deps/faiss ]; then
+    GLOMAP_DEPS_FLAGS+=" -DFETCHCONTENT_SOURCE_DIR_FAISS=/workspace/_glomap_deps/faiss"
+  fi
   cmake -S /tmp/glomap -B /tmp/glomap/build -GNinja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
+    -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" \
+    ${GLOMAP_DEPS_FLAGS}
   cmake --build /tmp/glomap/build --target install -j"$(nproc)"
 fi
 
