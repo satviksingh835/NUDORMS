@@ -130,9 +130,9 @@ if [ ! -d /workspace/Difix3D ]; then
 fi
 
 # PGSR: Planar-based GS, best Chamfer on textureless indoor, for mesh extraction.
-# Optional — skipped silently if clone or requirements install fails.
+# Repo: zju3dv/PGSR (TVCG 2024). Optional — skipped silently on failure.
 if [ ! -d /workspace/pgsr ]; then
-  if git clone --depth=1 https://github.com/hmanhng/pgsr /workspace/pgsr; then
+  if git clone --depth=1 https://github.com/zju3dv/PGSR /workspace/pgsr; then
     [ -f /workspace/pgsr/requirements.txt ] && \
       pip install -r /workspace/pgsr/requirements.txt || \
       echo "WARN: PGSR requirements.txt missing or failed to install — PGSR mesh stage will be skipped"
@@ -141,10 +141,11 @@ if [ ! -d /workspace/pgsr ]; then
   fi
 fi
 
-# 3DGUT: NVIDIA CVPR 2025, ray-traced reflections on monitors/windows.
+# 3DGRUT: NVIDIA CVPR 2025, ray-traced reflections (3DGUT + relighting).
+# Repo: nv-tlabs/3dgrut. Cloned into /workspace/3DGUT to match Python wrapper paths.
 # Optional — orchestrator falls back to gsplat MCMC if not installed.
 if [ ! -d /workspace/3DGUT ]; then
-  if git clone --depth=1 https://github.com/nv-tlabs/3DGUT /workspace/3DGUT; then
+  if git clone --depth=1 https://github.com/nv-tlabs/3dgrut /workspace/3DGUT; then
     [ -f /workspace/3DGUT/requirements.txt ] && \
       pip install -r /workspace/3DGUT/requirements.txt || \
       echo "WARN: 3DGUT requirements.txt missing or failed to install — reflections stage will be skipped"
