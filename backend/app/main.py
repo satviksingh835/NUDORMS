@@ -4,7 +4,8 @@ import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
+from typing import Optional
 
 load_dotenv()  # picks up backend/.env (REDIS_URL, S3_*, DATABASE_URL)
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,16 +42,27 @@ def _db() -> Session:
 
 
 @app.post("/scans", response_model=ScanResponse)
-async def create_scan(video: UploadFile, db: Session = Depends(_db)) -> ScanResponse:
+async def create_scan(
+    video: UploadFile,
+    imu: Optional[UploadFile] = File(default=None),
+    db: Session = Depends(_db),
+) -> ScanResponse:
     scan_id = uuid.uuid4().hex
     raw_key = scan_key(scan_id, "raw.mp4")
     put(raw_key, await video.read(), content_type=video.content_type or "video/mp4")
+
+    imu_key = None
+    if imu is not None:
+        imu_data = await imu.read()
+        if imu_data:
+            imu_key = scan_key(scan_id, "imu.jsonl")
+            put(imu_key, imu_data, content_type="application/jsonl")
 
     scan = Scan(id=scan_id, status=ScanStatus.QUEUED.value, raw_video_key=raw_key)
     db.add(scan)
     db.commit()
 
-    celery.send_task("pipeline.run", args=[scan_id], queue="gpu")
+    celery.send_task("pipeline.run", args=[scan_id], kwargs={"imu_key": imu_key}, queue="gpu")
     return ScanResponse(id=scan_id, status=ScanStatus.QUEUED)
 
 

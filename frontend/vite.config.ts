@@ -8,4 +8,8 @@ export default defineConfig({
       "/api": { target: "http://localhost:8000", changeOrigin: true, rewrite: (p) => p.replace(/^\/api/, "") },
     },
   },
+  optimizeDeps: {
+    // Both viewers use ESM bundles that Vite can't pre-bundle; exclude both.
+    exclude: ["@mkkellogg/gaussian-splats-3d", "@sparkjsdev/spark"],
+  },
 });

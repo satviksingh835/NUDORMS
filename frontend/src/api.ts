@@ -6,6 +6,7 @@ export type ScanStatus =
   | "training"
   | "evaluating"
   | "retrying"
+  | "refining"
   | "meshing"
   | "compressing"
   | "ready"
@@ -25,9 +26,10 @@ export interface ScanResponse {
 
 const API = "/api";
 
-export async function uploadScan(video: Blob): Promise<ScanResponse> {
+export async function uploadScan(video: Blob, imu?: Blob): Promise<ScanResponse> {
   const fd = new FormData();
   fd.append("video", video, "capture.mp4");
+  if (imu) fd.append("imu", imu, "imu.jsonl");
   const res = await fetch(`${API}/scans`, { method: "POST", body: fd });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

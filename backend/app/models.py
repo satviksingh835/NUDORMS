@@ -13,9 +13,11 @@ class ScanStatus(str, Enum):
     QC = "qc"
     FRAMES = "frames"
     POSING = "posing"
+    PRIORS = "priors"
     TRAINING = "training"
     EVALUATING = "evaluating"
     RETRYING = "retrying"
+    REFINING = "refining"     # Difix3D+ diffusion artifact fixer
     MESHING = "meshing"
     COMPRESSING = "compressing"
     READY = "ready"

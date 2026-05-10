@@ -80,5 +80,56 @@ if [ ! -f "$MAST3R_WEIGHTS" ]; then
     -O "$MAST3R_WEIGHTS"
 fi
 
+# VGGT: CVPR 2025 Best Paper feed-forward pose estimator (seconds, not minutes).
+# Model weights auto-downloaded from HuggingFace on first use via transformers.
+if [ ! -d /workspace/vggt ]; then
+  git clone --depth=1 https://github.com/facebookresearch/vggt /workspace/vggt
+  pip install -e /workspace/vggt
+fi
+
+# Scaffold-GS: CVPR 2024 Highlight, anchor-based 3DGS for textureless indoor.
+# Best PSNR on casual iPhone indoor capture; primary trainer in NUDORMS.
+if [ ! -d /workspace/Scaffold-GS ]; then
+  git clone --depth=1 https://github.com/city-super/Scaffold-GS /workspace/Scaffold-GS
+  pip install -r /workspace/Scaffold-GS/requirements.txt
+fi
+
+# Depth Anything V2 + normals: monocular depth priors for DN-Splatter supervision.
+# transformers is already installed via backend[gpu]; model auto-downloaded on first use.
+# Also install LPIPS for perceptual loss (fallback if Apple WD-R not available).
+pip install --quiet lpips
+
+# Spectacular AI SDK: VIO + VISLAM poses with metric scale + rolling-shutter
+# compensation. sai-cli is the CLI used by spectacular_ai.py pose wrapper.
+# Free for non-commercial use.
+pip install --quiet "spectacularai[full]" || pip install --quiet spectacularai
+
+# Difix3D+: CVPR 2025 Oral diffusion artifact fixer for 3DGS outputs.
+if [ ! -d /workspace/Difix3D ]; then
+  git clone --depth=1 https://github.com/nv-tlabs/Difix3D /workspace/Difix3D
+  pip install -r /workspace/Difix3D/requirements.txt
+fi
+
+# PGSR: Planar-based GS, best Chamfer on textureless indoor, for mesh extraction.
+if [ ! -d /workspace/pgsr ]; then
+  git clone --depth=1 https://github.com/hmanhng/pgsr /workspace/pgsr
+  pip install -r /workspace/pgsr/requirements.txt 2>/dev/null || true
+fi
+
+# 3DGUT: NVIDIA CVPR 2025, ray-traced reflections on monitors/windows.
+if [ ! -d /workspace/3DGUT ]; then
+  git clone --depth=1 https://github.com/nv-tlabs/3DGUT /workspace/3DGUT
+  pip install -r /workspace/3DGUT/requirements.txt 2>/dev/null || true
+fi
+
+# scikit-learn: needed for DBSCAN floater cleanup.
+pip install --quiet scikit-learn
+
+# Node.js + splat-transform for SOG compression (playcanvas/splat-transform).
+if ! command -v node >/dev/null; then
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt-get install -y --no-install-recommends nodejs
+fi
+
 export PYTHONPATH=/workspace/nudorms/backend
 exec celery -A app.celery_app worker --loglevel=info -Q gpu --concurrency=1

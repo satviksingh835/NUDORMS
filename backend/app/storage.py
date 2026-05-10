@@ -40,6 +40,13 @@ def put(key: str, body: BinaryIO | bytes, content_type: str | None = None) -> st
     return key
 
 
+def get(key: str) -> bytes:
+    """Fetch an object and return its contents as bytes."""
+    cfg = StorageConfig()
+    resp = _client(cfg).get_object(Bucket=cfg.bucket, Key=key)
+    return resp["Body"].read()
+
+
 def download(key: str, dest) -> None:
     """Download an object to a local path."""
     cfg = StorageConfig()
