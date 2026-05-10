@@ -16,6 +16,13 @@ set -euo pipefail
 
 REF="${NUDORMS_REF:-main}"
 REPO="${NUDORMS_REPO:?NUDORMS_REPO not set}"
+CUDA_ARCH="${CUDA_ARCH:-80;86;89}"
+
+# Sanity check the GPU is actually visible from inside the container.
+if ! nvidia-smi >/dev/null 2>&1; then
+  echo "ERROR: nvidia-smi failed — pod has no GPU access. Aborting."
+  exit 1
+fi
 
 # CUDA toolkit lives at /usr/local/cuda on RunPod images but isn't always on PATH.
 # COLMAP's cmake will fail with "CMAKE_CUDA_COMPILER could not be found" without this.
@@ -50,13 +57,17 @@ git pull
 if ! command -v colmap >/dev/null; then
   git clone --depth=1 https://github.com/colmap/colmap /tmp/colmap
   cmake -S /tmp/colmap -B /tmp/colmap/build -GNinja -DCMAKE_BUILD_TYPE=Release \
-    -DGUI_ENABLED=OFF -DCUDA_ENABLED=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-80;86;89}"
+    -DGUI_ENABLED=OFF -DCUDA_ENABLED=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
   cmake --build /tmp/colmap/build --target install -j"$(nproc)"
 fi
 if ! command -v glomap >/dev/null; then
   git clone --depth=1 https://github.com/colmap/glomap /tmp/glomap
+  # FETCH_COLMAP=OFF makes GLOMAP use the system COLMAP we just installed,
+  # instead of git-cloning + rebuilding all of COLMAP again (~15 min savings,
+  # plus avoids re-downloading the ~500MB onnxruntime tarball a second time).
   cmake -S /tmp/glomap -B /tmp/glomap/build -GNinja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH:-80;86;89}"
+    -DFETCH_COLMAP=OFF -DFETCH_POSELIB=OFF \
+    -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
   cmake --build /tmp/glomap/build --target install -j"$(nproc)"
 fi
 
@@ -117,15 +128,27 @@ if [ ! -d /workspace/Difix3D ]; then
 fi
 
 # PGSR: Planar-based GS, best Chamfer on textureless indoor, for mesh extraction.
+# Optional — skipped silently if clone or requirements install fails.
 if [ ! -d /workspace/pgsr ]; then
-  git clone --depth=1 https://github.com/hmanhng/pgsr /workspace/pgsr
-  pip install -r /workspace/pgsr/requirements.txt 2>/dev/null || true
+  if git clone --depth=1 https://github.com/hmanhng/pgsr /workspace/pgsr; then
+    [ -f /workspace/pgsr/requirements.txt ] && \
+      pip install -r /workspace/pgsr/requirements.txt || \
+      echo "WARN: PGSR requirements.txt missing or failed to install — PGSR mesh stage will be skipped"
+  else
+    echo "WARN: PGSR clone failed — PGSR mesh stage will be skipped"
+  fi
 fi
 
 # 3DGUT: NVIDIA CVPR 2025, ray-traced reflections on monitors/windows.
+# Optional — orchestrator falls back to gsplat MCMC if not installed.
 if [ ! -d /workspace/3DGUT ]; then
-  git clone --depth=1 https://github.com/nv-tlabs/3DGUT /workspace/3DGUT
-  pip install -r /workspace/3DGUT/requirements.txt 2>/dev/null || true
+  if git clone --depth=1 https://github.com/nv-tlabs/3DGUT /workspace/3DGUT; then
+    [ -f /workspace/3DGUT/requirements.txt ] && \
+      pip install -r /workspace/3DGUT/requirements.txt || \
+      echo "WARN: 3DGUT requirements.txt missing or failed to install — reflections stage will be skipped"
+  else
+    echo "WARN: 3DGUT clone failed — reflections stage will be skipped"
+  fi
 fi
 
 # scikit-learn: needed for DBSCAN floater cleanup.

@@ -14,9 +14,17 @@ data/
 *.db
 *.sqlite
 
+# Local capture / debug artifacts (videos, PLYs, smoke-test outputs).
+# Don't commit captures or pruned-PLY experiments to git history.
+test*.mp4
+test*.ply
+test*_nudorms_out/
+
+# Research / planning docs not part of the codebase
+compass_artifact_*.md
+
 # Editor
 .DS_Store
 .vscode/
 .idea/
 .env
-test6.mp4
