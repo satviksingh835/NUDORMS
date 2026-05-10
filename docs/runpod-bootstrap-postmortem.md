@@ -286,6 +286,18 @@ date — most of these will bite again on the next pod or next variant.
   user; explicit FAILED with an error message is a much better experience.
   Adding to open-issue list as **Q**.
 
+### 25. `MCMCStrategy.step_post_backward()` no longer accepts `packed` kwarg (gsplat 1.5.3)
+- **Symptom:** Training crashed after the 80-second CUDA JIT compile step with
+  `TypeError: MCMCStrategy.step_post_backward() got an unexpected keyword argument 'packed'`.
+  The task had already spent ~40 min on MASt3R + VGGT + priors before this hit.
+- **Cause:** gsplat 1.5.3 removed the `packed=` parameter from
+  `MCMCStrategy.step_post_backward()`. Our training loop still passed `packed=False`.
+- **Fix:** Remove `packed=False` from the `step_post_backward()` call in
+  `gsplat_mcmc.py` line 565.
+- **Lesson:** After every gsplat version bump, check both `rasterization()` (the
+  render call) and `MCMCStrategy` for removed/renamed parameters — they're the two
+  most-changed APIs between minor versions.
+
 ---
 
 ## Patterns / lessons

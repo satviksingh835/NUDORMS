@@ -6,7 +6,9 @@ This is the single place where quality decisions are made.
 """
 from __future__ import annotations
 
+import json
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -65,9 +67,13 @@ def run_pipeline(scan_id: str, task=None, imu_key: str | None = None) -> dict:
                 db.commit()
         return {"status": "failed", "stage": "preflight", "free_gb": free_gb}
 
-    with tempfile.TemporaryDirectory(prefix=f"scan-{scan_id}-") as tmp:
-        workdir = Path(tmp)
+    # Use a persistent workdir so pose artifacts survive training crashes.
+    # Named by scan_id so a re-run finds existing poses and skips to training.
+    # Cleaned up only on successful completion.
+    workdir = Path(tempfile.gettempdir()) / f"scan-{scan_id}"
+    workdir.mkdir(parents=True, exist_ok=True)
 
+    try:
         from app.storage import get as storage_get
 
         # Fetch IMU JSONL from R2 if available (uploaded alongside video)
@@ -93,42 +99,59 @@ def run_pipeline(scan_id: str, task=None, imu_key: str | None = None) -> dict:
         except Exception as e:
             log.warning("could not prefetch raw video for sai-cli (%s)", e)
 
-        # 1. QC --------------------------------------------------------------
-        _set_status(scan_id, ScanStatus.QC)
-        qc = ingest_qc.run(scan_id, workdir)
-        if not qc.ok:
-            _set_status(scan_id, ScanStatus.NEEDS_RECAPTURE, feedback=qc.artifacts)
-            return {"status": "needs_recapture", "stage": "qc"}
+        _ckpt_poses = workdir / "_ckpt_poses.json"
+        _ckpt_frames = workdir / "_ckpt_frames.json"
+        _ckpt_priors = workdir / "_ckpt_priors.json"
 
-        # 2. Frames ----------------------------------------------------------
-        _set_status(scan_id, ScanStatus.FRAMES)
-        frames = frame_select.run(scan_id, workdir)
-        if not frames.ok:
-            _set_status(scan_id, ScanStatus.FAILED, error=frames.failure_reason)
-            return {"status": "failed", "stage": "frames"}
+        if _ckpt_poses.exists() and _ckpt_frames.exists():
+            # Resume after a previous crash — skip QC / frames / posing
+            log.info("resuming from checkpoint: skipping QC, frames, posing")
+            frames = StageResult(True, {}, json.loads(_ckpt_frames.read_text()))
+            poses  = StageResult(True, {}, json.loads(_ckpt_poses.read_text()))
+        else:
+            # 1. QC ----------------------------------------------------------
+            _set_status(scan_id, ScanStatus.QC)
+            qc = ingest_qc.run(scan_id, workdir)
+            if not qc.ok:
+                _set_status(scan_id, ScanStatus.NEEDS_RECAPTURE, feedback=qc.artifacts)
+                return {"status": "needs_recapture", "stage": "qc"}
 
-        # 3. Pose ensemble (SAI → VGGT → MASt3R → GLOMAP → COLMAP) ----------
-        _set_status(scan_id, ScanStatus.POSING)
-        poses = pose_ensemble.run(
-            scan_id, workdir, frames.artifacts,
-            imu_jsonl_path=imu_jsonl_path,
-            video_path=video_path,
-        )
-        if not poses.ok:
-            _set_status(
-                scan_id,
-                ScanStatus.NEEDS_RECAPTURE,
-                feedback={"reason": "pose_estimation_failed", "details": poses.failure_reason},
+            # 2. Frames ------------------------------------------------------
+            _set_status(scan_id, ScanStatus.FRAMES)
+            frames = frame_select.run(scan_id, workdir)
+            if not frames.ok:
+                _set_status(scan_id, ScanStatus.FAILED, error=frames.failure_reason)
+                return {"status": "failed", "stage": "frames"}
+            _ckpt_frames.write_text(json.dumps(frames.artifacts))
+
+            # 3. Pose ensemble (SAI → VGGT → MASt3R → GLOMAP → COLMAP) ------
+            _set_status(scan_id, ScanStatus.POSING)
+            poses = pose_ensemble.run(
+                scan_id, workdir, frames.artifacts,
+                imu_jsonl_path=imu_jsonl_path,
+                video_path=video_path,
             )
-            return {"status": "needs_recapture", "stage": "posing"}
+            if not poses.ok:
+                _set_status(
+                    scan_id,
+                    ScanStatus.NEEDS_RECAPTURE,
+                    feedback={"reason": "pose_estimation_failed", "details": poses.failure_reason},
+                )
+                return {"status": "needs_recapture", "stage": "posing"}
+            _ckpt_poses.write_text(json.dumps(poses.artifacts))
 
         # 4. Geometric priors (Depth Anything V2 + surface normals) ----------
-        _set_status(scan_id, ScanStatus.PRIORS)
-        priors = priors_stage.run(scan_id, workdir, frames.artifacts)
-        if not priors.ok:
-            log.warning("priors stage failed (%s) — continuing with depth/normal weight=0",
-                        priors.failure_reason)
-        prior_artifacts = priors.artifacts if priors.ok else {}
+        if _ckpt_priors.exists():
+            log.info("resuming from checkpoint: skipping priors")
+            prior_artifacts = json.loads(_ckpt_priors.read_text())
+        else:
+            _set_status(scan_id, ScanStatus.PRIORS)
+            priors = priors_stage.run(scan_id, workdir, frames.artifacts)
+            if not priors.ok:
+                log.warning("priors stage failed (%s) — continuing with depth/normal weight=0",
+                            priors.failure_reason)
+            prior_artifacts = priors.artifacts if priors.ok else {}
+            _ckpt_priors.write_text(json.dumps(prior_artifacts))
 
         # 5. Train + 6. Eval (with auto-retry) ------------------------------
         # Attempt order: Scaffold-GS (CVPR 2024 Highlight, best on indoor) →
@@ -242,4 +265,13 @@ def run_pipeline(scan_id: str, task=None, imu_key: str | None = None) -> dict:
             mesh_key=(mesh_artifacts.artifacts.get("mesh_key") if mesh_artifacts else None),
             lod_keys=compressed.artifacts.get("lod_keys"),
         )
+        shutil.rmtree(workdir, ignore_errors=True)
         return {"status": "ready", "metrics": train_metrics}
+
+    except Exception as exc:
+        log.exception("unhandled exception in pipeline for scan %s", scan_id)
+        try:
+            _set_status(scan_id, ScanStatus.FAILED, error=str(exc)[:2000])
+        except Exception:
+            pass
+        raise
