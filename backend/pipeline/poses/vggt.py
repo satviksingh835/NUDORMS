@@ -29,7 +29,13 @@ from .mast3r import _quat_wxyz_from_R, _write_colmap_binary
 log = logging.getLogger("nudorms.poses.vggt")
 
 VGGT_MODEL = os.environ.get("NUDORMS_VGGT_MODEL", "facebook/vggt-1B")
-CHUNK_SIZE = int(os.environ.get("NUDORMS_VGGT_CHUNK", "200"))
+# IMPORTANT: VGGT outputs poses in a coordinate frame relative to the first
+# frame *of each forward pass*. Splitting frames across multiple chunks gives
+# poses in different coordinate systems that can't be concatenated correctly.
+# So CHUNK_SIZE must be >= total frame count. Default 400 covers any
+# reasonable casual capture; if VRAM is the bottleneck, use a smaller VGGT
+# variant (vggt-base) instead of chunking.
+CHUNK_SIZE = int(os.environ.get("NUDORMS_VGGT_CHUNK", "400"))
 MAX_POINTS_PER_FRAME = 2000   # subsample dense point map to keep sparse model compact
 
 
@@ -60,6 +66,18 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
     total = len(frames)
     if total < 3:
         return StageResult(False, {}, {}, failure_reason=f"need >=3 frames, got {total}")
+
+    # VGGT outputs per-chunk coordinate systems. If we'd need to chunk,
+    # bail explicitly so the ensemble falls through to MASt3R rather than
+    # produce silently broken (chunk-stitched) poses.
+    if total > CHUNK_SIZE:
+        return StageResult(
+            False, {}, {},
+            failure_reason=(
+                f"VGGT requires single-pass: {total} frames > CHUNK_SIZE={CHUNK_SIZE}. "
+                "Raise NUDORMS_VGGT_CHUNK or pre-subsample frames."
+            ),
+        )
 
     image_paths = [str(p) for p in frames]
 

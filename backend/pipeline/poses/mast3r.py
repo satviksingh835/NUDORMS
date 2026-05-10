@@ -40,7 +40,7 @@ log = logging.getLogger("nudorms.poses.mast3r")
 MAST3R_MODEL = os.environ.get(
     "NUDORMS_MAST3R_MODEL", "/workspace/mast3r_models/MASt3R.pth"
 )
-WIN_SIZE = int(os.environ.get("NUDORMS_MAST3R_WIN", "20"))
+WIN_SIZE = int(os.environ.get("NUDORMS_MAST3R_WIN", "10"))
 INFER_SIZE = int(os.environ.get("NUDORMS_MAST3R_SIZE", "512"))
 # Anchor density for the SGA optimizer. Lower = more anchors = more VRAM.
 # Upstream default is 8; on a 24 GB GPU we OOM around ~200 frames at 8,

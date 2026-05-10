@@ -40,9 +40,30 @@ def _set_status(scan_id: str, status: ScanStatus, **fields) -> None:
         db.commit()
 
 
+MIN_FREE_DISK_GB = 30   # MASt3R SGA cache + workdir; bail early if /tmp is tight
+
+
+def _free_disk_gb(path: str = "/tmp") -> float:
+    import shutil
+    return shutil.disk_usage(path).free / 1024**3
+
+
 def run_pipeline(scan_id: str, task=None, imu_key: str | None = None) -> dict:
     """End-to-end pipeline. Each stage updates the DB; failures are recorded."""
     from app.storage import get, scan_key as _scan_key
+
+    free_gb = _free_disk_gb("/tmp")
+    if free_gb < MIN_FREE_DISK_GB:
+        log.error("only %.1f GB free in /tmp; need >=%d GB. Aborting before stage 1.",
+                  free_gb, MIN_FREE_DISK_GB)
+        with get_session() as db:
+            scan = db.get(Scan, scan_id)
+            if scan:
+                scan.status = ScanStatus.FAILED.value
+                scan.error = (f"insufficient disk: {free_gb:.1f} GB free in /tmp "
+                              f"(need ≥{MIN_FREE_DISK_GB} GB for MASt3R SGA cache)")
+                db.commit()
+        return {"status": "failed", "stage": "preflight", "free_gb": free_gb}
 
     with tempfile.TemporaryDirectory(prefix=f"scan-{scan_id}-") as tmp:
         workdir = Path(tmp)
