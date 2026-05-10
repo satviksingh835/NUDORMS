@@ -285,26 +285,39 @@ date — most of these will bite again on the next pod or next variant.
   Silent training-stage death looks identical to "still running" to the
   user; explicit FAILED with an error message is a much better experience.
 
-### 25. `MCMCStrategy.step_post_backward()` no longer accepts `packed` kwarg (gsplat 1.5.3) — **FIXED**
+### 25. Three consecutive `MCMCStrategy` API breaks (gsplat 1.5.3) — **ALL FIXED**
 - **Symptom:** Training crashed after the 80-second CUDA JIT compile step with
   `TypeError: MCMCStrategy.step_post_backward() got an unexpected keyword argument 'packed'`.
   The task had already spent ~40 min on MASt3R + VGGT + priors before this hit.
   Crash happened at step 0 — zero training iterations completed.
 - **Cause:** gsplat 1.5.3 removed the `packed=` parameter from
   `MCMCStrategy.step_post_backward()`. Our training loop still passed `packed=False`.
-- **Fix:** Removed `packed=False` from the `step_post_backward()` call in
-  `gsplat_mcmc.py`. SCP'd directly to the pod (couldn't git push in-session).
-- **Second hit:** Even after SCP'ing the fix, the crash recurred on the very next
-  run. Root cause: Python had already compiled the old code to
-  `__pycache__/gsplat_mcmc.cpython-311.pyc` (mtime older than the SCP'd `.py`),
-  and the Celery forked worker process loaded the `.pyc` instead of recompiling.
-  Fix: `find /workspace/nudorms/backend -name "*.pyc" -delete` + worker restart
-  before re-dispatching. Verified by `strings <pyc> | grep packed` — the only
-  remaining hit is the legitimate `packed=False` in `rasterization()`, not
-  `step_post_backward()`.
-- **Lesson:** After every gsplat version bump, check both `rasterization()` (the
-  render call) and `MCMCStrategy` for removed/renamed parameters — they're the two
-  most-changed APIs between minor versions. Pin the gsplat version in `pyproject.toml`.
+- **Hit 1 — `packed` kwarg removed:** `step_post_backward(..., packed=False)` →
+  `TypeError: got an unexpected keyword argument 'packed'`. Fix: remove `packed=False`.
+- **Hit 2 — stale `.pyc` loaded over the fix:** SCP preserves the Mac file's mtime
+  (18:26). The existing `.pyc` was compiled at 19:11 and had a newer mtime, so Python
+  used the stale bytecode and the crash repeated. Fix: `touch` the `.py` after every
+  SCP to give it a current mtime, then `find . -name "*.pyc" -delete`. Verify with
+  `strings <pyc> | grep packed`.
+- **Hit 3 — `lr` required positional arg:** After removing `packed`, the call
+  `step_post_backward(..., step, info)` → `TypeError: missing required argument 'lr'`.
+  The full signature is `(params, optimizers, state, step, info, lr: float)`.
+  Fix: read lr from the means optimizer: `_lr = optimizers["means"].param_groups[0]["lr"]`.
+- **Hit 4 — `strategy_state` never initialized:** `strategy_state = {}` caused
+  `KeyError: 'binoms'` on the first refine step. `step_post_backward` immediately
+  does `state["binoms"].to(device)` where `binoms` is a precomputed Pascal's triangle
+  tensor. Fix: `strategy_state = strategy.initialize_state()`.
+- **Root cause of all four:** We wrote the training loop against an older gsplat
+  version's docs/examples. The right approach is `inspect.signature(MCMCStrategy.step_post_backward)`
+  and read the docstring example *on the installed version* before writing any call site.
+- **Lesson:** Never assume a CV library's API is stable across minor versions. Before
+  writing any call to `rasterization()` or `MCMCStrategy`, run:
+  ```python
+  import inspect; from gsplat.strategy import MCMCStrategy
+  print(inspect.signature(MCMCStrategy.step_post_backward))
+  # also read the docstring example in MCMCStrategy.__doc__
+  ```
+  Pin gsplat in `pyproject.toml` to lock the version once it works.
 
 ### 26. Crash after 40-min pose stage forces full re-run due to tempfile cleanup — **FIXED**
 - **Symptom:** Entry 25's training crash caused `tempfile.TemporaryDirectory.__exit__`
