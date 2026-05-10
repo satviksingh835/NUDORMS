@@ -100,18 +100,21 @@ if [ ! -f "$MAST3R_WEIGHTS" ]; then
 fi
 
 # VGGT: CVPR 2025 Best Paper feed-forward pose estimator (seconds, not minutes).
-# Model weights auto-downloaded from HuggingFace on first use via transformers.
+# Clone is gated on dir existence; pip install runs every time so a manually
+# extracted dir (tarball restore, baked template) still gets editable-installed.
 if [ ! -d /workspace/vggt ]; then
   git clone --depth=1 https://github.com/facebookresearch/vggt /workspace/vggt
-  pip install -e /workspace/vggt
 fi
+[ -d /workspace/vggt ] && pip install -e /workspace/vggt || \
+  echo "WARN: VGGT install failed — fallback to MASt3R"
 
 # Scaffold-GS: CVPR 2024 Highlight, anchor-based 3DGS for textureless indoor.
-# Best PSNR on casual iPhone indoor capture; primary trainer in NUDORMS.
 if [ ! -d /workspace/Scaffold-GS ]; then
   git clone --depth=1 https://github.com/city-super/Scaffold-GS /workspace/Scaffold-GS
-  pip install -r /workspace/Scaffold-GS/requirements.txt
 fi
+[ -f /workspace/Scaffold-GS/requirements.txt ] && \
+  pip install -r /workspace/Scaffold-GS/requirements.txt || \
+  echo "WARN: Scaffold-GS requirements missing — fallback to gsplat MCMC"
 
 # Depth Anything V2 + normals: monocular depth priors for DN-Splatter supervision.
 # transformers is already installed via backend[gpu]; model auto-downloaded on first use.
@@ -121,38 +124,32 @@ pip install --quiet lpips
 # Spectacular AI SDK: VIO + VISLAM poses with metric scale + rolling-shutter
 # compensation. sai-cli is the CLI used by spectacular_ai.py pose wrapper.
 # Free for non-commercial use.
-pip install --quiet "spectacularai[full]" || pip install --quiet spectacularai
+pip install --quiet "spectacularai[full]" || pip install --quiet spectacularai || \
+  echo "WARN: spectacularai install failed — fallback to VGGT/MASt3R for pose"
 
 # Difix3D+: CVPR 2025 Oral diffusion artifact fixer for 3DGS outputs.
 if [ ! -d /workspace/Difix3D ]; then
-  git clone --depth=1 https://github.com/nv-tlabs/Difix3D /workspace/Difix3D
-  pip install -r /workspace/Difix3D/requirements.txt
+  git clone --depth=1 https://github.com/nv-tlabs/Difix3D /workspace/Difix3D || \
+    echo "WARN: Difix3D clone failed — refining stage will be skipped"
 fi
+[ -f /workspace/Difix3D/requirements.txt ] && \
+  pip install -r /workspace/Difix3D/requirements.txt || true
 
 # PGSR: Planar-based GS, best Chamfer on textureless indoor, for mesh extraction.
-# Repo: zju3dv/PGSR (TVCG 2024). Optional — skipped silently on failure.
 if [ ! -d /workspace/pgsr ]; then
-  if git clone --depth=1 https://github.com/zju3dv/PGSR /workspace/pgsr; then
-    [ -f /workspace/pgsr/requirements.txt ] && \
-      pip install -r /workspace/pgsr/requirements.txt || \
-      echo "WARN: PGSR requirements.txt missing or failed to install — PGSR mesh stage will be skipped"
-  else
-    echo "WARN: PGSR clone failed — PGSR mesh stage will be skipped"
-  fi
+  git clone --depth=1 https://github.com/zju3dv/PGSR /workspace/pgsr || \
+    echo "WARN: PGSR clone failed — falls back to 2DGS for mesh"
 fi
+[ -f /workspace/pgsr/requirements.txt ] && \
+  pip install -r /workspace/pgsr/requirements.txt || true
 
 # 3DGRUT: NVIDIA CVPR 2025, ray-traced reflections (3DGUT + relighting).
-# Repo: nv-tlabs/3dgrut. Cloned into /workspace/3DGUT to match Python wrapper paths.
-# Optional — orchestrator falls back to gsplat MCMC if not installed.
 if [ ! -d /workspace/3DGUT ]; then
-  if git clone --depth=1 https://github.com/nv-tlabs/3dgrut /workspace/3DGUT; then
-    [ -f /workspace/3DGUT/requirements.txt ] && \
-      pip install -r /workspace/3DGUT/requirements.txt || \
-      echo "WARN: 3DGUT requirements.txt missing or failed to install — reflections stage will be skipped"
-  else
+  git clone --depth=1 https://github.com/nv-tlabs/3dgrut /workspace/3DGUT || \
     echo "WARN: 3DGUT clone failed — reflections stage will be skipped"
-  fi
 fi
+[ -f /workspace/3DGUT/requirements.txt ] && \
+  pip install -r /workspace/3DGUT/requirements.txt || true
 
 # scikit-learn: needed for DBSCAN floater cleanup.
 pip install --quiet scikit-learn
