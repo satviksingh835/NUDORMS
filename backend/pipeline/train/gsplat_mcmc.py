@@ -397,7 +397,7 @@ def run(scan_id: str, workdir: Path, pose_artifacts: dict,
         refine_every=100,
         min_opacity=0.005,           # cull_alpha_thresh from the doc
     )
-    strategy_state: dict = {}
+    strategy_state = strategy.initialize_state()
 
     # Build perceptual loss (WD-R → LPIPS → None)
     perceptual_loss_fn = _build_perceptual_loss() if cfg.perceptual_weight > 0 else None
@@ -562,7 +562,8 @@ def run(scan_id: str, workdir: Path, pose_artifacts: dict,
         for opt in optimizers.values():
             opt.step()
             opt.zero_grad(set_to_none=True)
-        strategy.step_post_backward(splats, optimizers, strategy_state, step, info)
+        _lr = optimizers["means"].param_groups[0]["lr"]
+        strategy.step_post_backward(splats, optimizers, strategy_state, step, info, _lr)
 
         losses_window.append(loss.item())
         if len(losses_window) > 200:
