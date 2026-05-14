@@ -4,7 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
+from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile, File
 from typing import Optional
 
 load_dotenv()  # picks up backend/.env (REDIS_URL, S3_*, DATABASE_URL)
@@ -45,8 +45,10 @@ def _db() -> Session:
 async def create_scan(
     video: UploadFile,
     imu: Optional[UploadFile] = File(default=None),
+    stops: Optional[str] = Form(default=None),
     db: Session = Depends(_db),
 ) -> ScanResponse:
+    import json as _json
     scan_id = uuid.uuid4().hex
     raw_key = scan_key(scan_id, "raw.mp4")
     put(raw_key, await video.read(), content_type=video.content_type or "video/mp4")
@@ -58,11 +60,28 @@ async def create_scan(
             imu_key = scan_key(scan_id, "imu.jsonl")
             put(imu_key, imu_data, content_type="application/jsonl")
 
-    scan = Scan(id=scan_id, status=ScanStatus.QUEUED.value, raw_video_key=raw_key)
+    stops_list = None
+    if stops:
+        try:
+            stops_list = _json.loads(stops)
+        except Exception:
+            stops_list = None
+
+    scan = Scan(
+        id=scan_id,
+        status=ScanStatus.QUEUED.value,
+        raw_video_key=raw_key,
+        metrics={"stops": stops_list} if stops_list else None,
+    )
     db.add(scan)
     db.commit()
 
-    celery.send_task("pipeline.run", args=[scan_id], kwargs={"imu_key": imu_key}, queue="gpu")
+    celery.send_task(
+        "pipeline.run",
+        args=[scan_id],
+        kwargs={"imu_key": imu_key, "stops": stops_list},
+        queue="gpu",
+    )
     return ScanResponse(id=scan_id, status=ScanStatus.QUEUED)
 
 
@@ -77,9 +96,8 @@ def get_scan(scan_id: str, db: Session = Depends(_db)) -> ScanResponse:
         status=ScanStatus(scan.status),
         metrics=scan.metrics,
         error=scan.error,
-        splat_url=presigned_get(scan.splat_key) if scan.splat_key else None,
-        mesh_url=presigned_get(scan.mesh_key) if scan.mesh_key else None,
-        lod_urls={k: presigned_get(v) for k, v in (scan.lod_keys or {}).items()} or None,
+        graph_url=presigned_get(scan.graph_key) if scan.graph_key else None,
+        pano_urls={k: presigned_get(v) for k, v in (scan.pano_keys or {}).items()} or None,
     )
 
 

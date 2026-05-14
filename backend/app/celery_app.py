@@ -23,7 +23,7 @@ celery.conf.update(
 
 
 @celery.task(name="pipeline.run", bind=True)
-def run_pipeline_task(self, scan_id: str, imu_key: str | None = None) -> dict:
+def run_pipeline_task(self, scan_id: str, imu_key: str | None = None, stops: list | None = None) -> dict:
     """Entry point for the GPU worker. Delegates to the orchestrator.
 
     If NUDORMS_AUTO_STOP_POD=1 is set in the env, the pod stops itself
@@ -34,7 +34,7 @@ def run_pipeline_task(self, scan_id: str, imu_key: str | None = None) -> dict:
     from pipeline.auto_stop import auto_stop_enabled, stop_pod_self
 
     try:
-        result = run_pipeline(scan_id, task=self, imu_key=imu_key)
+        result = run_pipeline(scan_id, task=self, imu_key=imu_key, stops=stops)
     except Exception:
         if auto_stop_enabled():
             stop_pod_self(reason="pipeline_exception")

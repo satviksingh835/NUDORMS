@@ -38,7 +38,8 @@ apt-get install -y --no-install-recommends \
   libopenimageio-dev libmetis-dev libsqlite3-dev openimageio-tools \
   libopenexr-dev libtiff-dev libpng-dev libjpeg-dev \
   libgl1-mesa-dev libglu1-mesa-dev libegl1-mesa-dev \
-  libglew-dev libopencv-dev libssl-dev libcurl4-openssl-dev
+  libglew-dev libopencv-dev libssl-dev libcurl4-openssl-dev \
+  hugin-tools enblend
 
 # Newer cmake than Ubuntu 22.04 ships (faiss/colmap deps need >=3.24).
 pip install --upgrade "cmake>=3.28"
@@ -120,57 +121,11 @@ fi
 [ -d /workspace/vggt ] && pip install -e /workspace/vggt || \
   echo "WARN: VGGT install failed — fallback to MASt3R"
 
-# Scaffold-GS: CVPR 2024 Highlight, anchor-based 3DGS for textureless indoor.
-if [ ! -d /workspace/Scaffold-GS ]; then
-  git clone --depth=1 https://github.com/city-super/Scaffold-GS /workspace/Scaffold-GS
-fi
-[ -f /workspace/Scaffold-GS/requirements.txt ] && \
-  pip install -r /workspace/Scaffold-GS/requirements.txt || \
-  echo "WARN: Scaffold-GS requirements missing — fallback to gsplat MCMC"
-
-# Depth Anything V2 + normals: monocular depth priors for DN-Splatter supervision.
-# transformers is already installed via backend[gpu]; model auto-downloaded on first use.
-# Also install LPIPS for perceptual loss (fallback if Apple WD-R not available).
-pip install --quiet lpips
-
 # Spectacular AI SDK: VIO + VISLAM poses with metric scale + rolling-shutter
 # compensation. sai-cli is the CLI used by spectacular_ai.py pose wrapper.
 # Free for non-commercial use.
 pip install --quiet "spectacularai[full]" || pip install --quiet spectacularai || \
   echo "WARN: spectacularai install failed — fallback to VGGT/MASt3R for pose"
-
-# Difix3D+: CVPR 2025 Oral diffusion artifact fixer for 3DGS outputs.
-if [ ! -d /workspace/Difix3D ]; then
-  git clone --depth=1 https://github.com/nv-tlabs/Difix3D /workspace/Difix3D || \
-    echo "WARN: Difix3D clone failed — refining stage will be skipped"
-fi
-[ -f /workspace/Difix3D/requirements.txt ] && \
-  pip install -r /workspace/Difix3D/requirements.txt || true
-
-# PGSR: Planar-based GS, best Chamfer on textureless indoor, for mesh extraction.
-if [ ! -d /workspace/pgsr ]; then
-  git clone --depth=1 https://github.com/zju3dv/PGSR /workspace/pgsr || \
-    echo "WARN: PGSR clone failed — falls back to 2DGS for mesh"
-fi
-[ -f /workspace/pgsr/requirements.txt ] && \
-  pip install -r /workspace/pgsr/requirements.txt || true
-
-# 3DGRUT: NVIDIA CVPR 2025, ray-traced reflections (3DGUT + relighting).
-if [ ! -d /workspace/3DGUT ]; then
-  git clone --depth=1 https://github.com/nv-tlabs/3dgrut /workspace/3DGUT || \
-    echo "WARN: 3DGUT clone failed — reflections stage will be skipped"
-fi
-[ -f /workspace/3DGUT/requirements.txt ] && \
-  pip install -r /workspace/3DGUT/requirements.txt || true
-
-# scikit-learn: needed for DBSCAN floater cleanup.
-pip install --quiet scikit-learn
-
-# Node.js + splat-transform for SOG compression (playcanvas/splat-transform).
-if ! command -v node >/dev/null; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  apt-get install -y --no-install-recommends nodejs
-fi
 
 # PYTHONPATH wires the worker against the MASt3R + dust3r source trees
 # (no setup.py upstream) and against our backend package.

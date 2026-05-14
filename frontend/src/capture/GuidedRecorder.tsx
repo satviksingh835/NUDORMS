@@ -1,26 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 
+import { type Stop } from "../api";
 import { CoverageMap } from "./CoverageMap";
 
 const FAST_MOTION_DEG_S = 90;
-const MIN_OVERALL_COVERAGE = 0.85;
-const MIN_DURATION_S = 30;
+const MIN_STOP_COVERAGE = 0.85;   // 85% yaw coverage per stop
+const MIN_STOPS = 2;              // need at least 2 nodes for navigation
 
-// Multi-station guidance steps (LighthouseGS / Scaniverse consensus, 2025)
-const STEPS = [
-  { id: "knee",      label: "Station 1 — knee height",   hint: "Hold phone low, rotate slowly 360°" },
-  { id: "eye",       label: "Station 2 — eye height",    hint: "Hold phone at eye level, rotate 360°" },
-  { id: "raised",    label: "Station 3 — arm raised",    hint: "Hold phone high, rotate 360°" },
-  { id: "loop",      label: "Connecting loop",           hint: "Slow walk connecting all 3 stations" },
-] as const;
 interface ImuSample {
   t: number;
   wx: number; wy: number; wz: number;
   ax: number; ay: number; az: number;
 }
 
+type Mode = "walking" | "at_stop";
+
 interface Props {
-  onComplete: (video: Blob, imu?: Blob) => void;
+  onComplete: (video: Blob, imu?: Blob, stops?: Stop[]) => void;
 }
 
 export function GuidedRecorder({ onComplete }: Props) {
@@ -29,15 +25,20 @@ export function GuidedRecorder({ onComplete }: Props) {
   const chunksRef = useRef<Blob[]>([]);
   const imuRef = useRef<ImuSample[]>([]);
   const recordingRef = useRef(false);
+  const recordingStartRef = useRef<number>(0);
   const coverage = useRef(new CoverageMap());
+  const stopsRef = useRef<Stop[]>([]);
+  const stopStartRef = useRef<number | null>(null);
 
   const [recording, setRecording] = useState(false);
-  const [coveragePct, setCoveragePct] = useState(0);
-  const [heightPasses, setHeightPasses] = useState<[boolean, boolean, boolean]>([false, false, false]);
-  const [currentHeight, setCurrentHeight] = useState<string>("eye");
+  const [mode, setMode] = useState<Mode>("walking");
+  const [stopCoverage, setStopCoverage] = useState(0);
   const [tooFast, setTooFast] = useState(false);
+  const [completedStops, setCompletedStops] = useState(0);
   const [elapsedS, setElapsedS] = useState(0);
-  const [stepIdx, setStepIdx] = useState(0);
+
+  const currentVideoTime = () =>
+    recording ? (performance.now() - recordingStartRef.current) / 1000 : 0;
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -69,23 +70,8 @@ export function GuidedRecorder({ onComplete }: Props) {
     })();
 
     const onMotion = (ev: DeviceMotionEvent) => {
-      coverage.current.ingestMotion(ev);
-      const overall = coverage.current.overallCoverage();
-      const hp = coverage.current.heightPasses.slice() as [boolean, boolean, boolean];
-      setCoveragePct(overall);
-      setHeightPasses(hp);
-      setCurrentHeight(coverage.current.currentHeightLabel());
-
       const yawRate = Math.abs(ev.rotationRate?.alpha ?? 0);
       setTooFast(yawRate > FAST_MOTION_DEG_S);
-
-      // Auto-advance step based on height coverage
-      const hCount = coverage.current.heightPassCount();
-      const yaw = coverage.current.coverage();
-      if (hCount === 0) setStepIdx(0);
-      else if (hCount === 1 && yaw > 0.6) setStepIdx(1);
-      else if (hCount === 2 && yaw > 0.6) setStepIdx(2);
-      else if (hCount === 3) setStepIdx(3);
 
       if (recordingRef.current) {
         imuRef.current.push({
@@ -97,6 +83,9 @@ export function GuidedRecorder({ onComplete }: Props) {
           ay: ev.accelerationIncludingGravity?.y ?? 0,
           az: ev.accelerationIncludingGravity?.z ?? 0,
         });
+
+        coverage.current.ingestMotion(ev);
+        setStopCoverage(coverage.current.overallCoverage());
       }
     };
 
@@ -114,14 +103,16 @@ export function GuidedRecorder({ onComplete }: Props) {
     return () => clearInterval(id);
   }, [recording]);
 
-  const start = () => {
+  const startRecording = () => {
     const stream = videoRef.current?.srcObject as MediaStream | null;
     if (!stream) return;
-    coverage.current.reset();
+    stopsRef.current = [];
     chunksRef.current = [];
     imuRef.current = [];
     recordingRef.current = true;
-    setStepIdx(0);
+    recordingStartRef.current = performance.now();
+    setCompletedStops(0);
+    setMode("walking");
 
     const rec = new MediaRecorder(stream, { mimeType: "video/mp4" });
     rec.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
@@ -133,17 +124,37 @@ export function GuidedRecorder({ onComplete }: Props) {
         const jsonl = imuRef.current.map((s) => JSON.stringify(s)).join("\n");
         imuBlob = new Blob([jsonl], { type: "application/jsonl" });
       }
-      onComplete(videoBlob, imuBlob);
+      onComplete(videoBlob, imuBlob, stopsRef.current);
     };
     rec.start(1000);
     recorderRef.current = rec;
     setRecording(true);
   };
 
-  const canStop = coveragePct >= MIN_OVERALL_COVERAGE && elapsedS >= MIN_DURATION_S;
-  const stop = () => recorderRef.current?.stop();
+  const enterStop = () => {
+    coverage.current.reset();
+    setStopCoverage(0);
+    stopStartRef.current = currentVideoTime();
+    setMode("at_stop");
+  };
 
-  const currentStep = STEPS[Math.min(stepIdx, STEPS.length - 1)];
+  const leaveStop = () => {
+    if (stopStartRef.current === null) return;
+    stopsRef.current.push({
+      start_s: stopStartRef.current,
+      end_s: currentVideoTime(),
+    });
+    stopStartRef.current = null;
+    setCompletedStops(stopsRef.current.length);
+    setMode("walking");
+    coverage.current.reset();
+    setStopCoverage(0);
+  };
+
+  const stopReady = stopCoverage >= MIN_STOP_COVERAGE;
+  const canFinish = completedStops >= MIN_STOPS;
+
+  const finish = () => recorderRef.current?.stop();
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100vh" }}>
@@ -153,55 +164,75 @@ export function GuidedRecorder({ onComplete }: Props) {
         <div style={overlay("rgba(220,40,40,0.85)")}>SLOW DOWN — moving too fast</div>
       )}
 
-      {/* Step guidance */}
+      {/* Mode banner */}
       {recording && (
-        <div style={stepBanner}>
-          <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 2 }}>
-            Step {stepIdx + 1} / {STEPS.length}
-          </div>
-          <div style={{ fontSize: 18, fontWeight: 700 }}>{currentStep.label}</div>
-          <div style={{ fontSize: 14, opacity: 0.85, marginTop: 4 }}>{currentStep.hint}</div>
+        <div style={modeBanner(mode)}>
+          {mode === "walking" ? (
+            <>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>Walking between stops</div>
+              <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>
+                Move to your next spot, then tap "At a stop"
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>At a stop — rotate 360°</div>
+              <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>
+                Hold steady and rotate slowly all the way around at eye level
+              </div>
+            </>
+          )}
         </div>
       )}
 
+      {/* HUD */}
       <div style={hud}>
-        <div>coverage: {Math.round(coveragePct * 100)}%</div>
+        <div>stops: {completedStops}</div>
         <div>elapsed: {elapsedS.toFixed(0)}s</div>
-        <div style={{ marginTop: 4, fontSize: 12 }}>
-          height passes:{" "}
-          {(["knee", "eye", "arm↑"] as const).map((h, i) => (
-            <span
-              key={h}
-              style={{ marginRight: 6, opacity: heightPasses[i] ? 1 : 0.35,
-                       fontWeight: currentHeight === (["knee","eye","arm-raised"])[i] ? 700 : 400 }}
-            >
-              {h}
-            </span>
-          ))}
-        </div>
+        {mode === "at_stop" && (
+          <div>rotation: {Math.round(stopCoverage * 100)}%</div>
+        )}
       </div>
 
+      {/* Pre-capture tips */}
       {!recording && (
         <div style={preCaptureTips}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Capture tips</div>
-          <div>1. Rotate 360° at knee height</div>
-          <div>2. Rotate 360° at eye height</div>
-          <div>3. Rotate 360° with arm raised</div>
-          <div>4. Slow loop connecting all stations</div>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>How to capture</div>
+          <div>1. Tap "Start" and walk to your first spot</div>
+          <div>2. Tap "At a stop" and do a slow 360° rotation</div>
+          <div>3. Tap "Done with stop" and walk to the next spot</div>
+          <div>4. Repeat for every viewpoint you want (≥ 2 stops)</div>
+          <div>5. Tap "Finish" when done</div>
           <div style={{ marginTop: 8, opacity: 0.7, fontSize: 12 }}>
-            Use overcast or all-artificial light. Avoid moving mirrors/screens.
+            Keep phone at eye level. Move slowly. Good lighting helps.
           </div>
         </div>
       )}
 
+      {/* Controls */}
       <div style={controls}>
         {!recording ? (
-          <button onClick={start} style={btn}>Start capture</button>
+          <button onClick={startRecording} style={btn}>Start capture</button>
+        ) : mode === "walking" ? (
+          <div style={{ display: "flex", gap: 12 }}>
+            <button onClick={enterStop} style={btn}>At a stop</button>
+            <button
+              onClick={finish}
+              disabled={!canFinish}
+              style={{ ...btn, ...btnSecondary, opacity: canFinish ? 1 : 0.35 }}
+            >
+              Finish ({completedStops} stops)
+            </button>
+          </div>
         ) : (
-          <button onClick={stop} disabled={!canStop} style={{ ...btn, opacity: canStop ? 1 : 0.4 }}>
-            {canStop
-              ? "Done — upload"
-              : `Keep going (${Math.round(coveragePct * 100)}% / ${elapsedS.toFixed(0)}s)`}
+          <button
+            onClick={leaveStop}
+            disabled={!stopReady}
+            style={{ ...btn, opacity: stopReady ? 1 : 0.4 }}
+          >
+            {stopReady
+              ? "Done with stop"
+              : `Keep rotating (${Math.round(stopCoverage * 100)}%)`}
           </button>
         )}
       </div>
@@ -212,24 +243,31 @@ export function GuidedRecorder({ onComplete }: Props) {
 const hud: React.CSSProperties = {
   position: "absolute", top: 16, left: 16, padding: "8px 12px",
   background: "rgba(0,0,0,0.6)", borderRadius: 8, fontVariantNumeric: "tabular-nums",
+  color: "#fff", fontSize: 13,
 };
 const controls: React.CSSProperties = {
   position: "absolute", bottom: 32, left: 0, right: 0, display: "flex", justifyContent: "center",
 };
 const btn: React.CSSProperties = {
-  padding: "14px 28px", fontSize: 18, borderRadius: 999, border: 0,
-  background: "#fff", color: "#000", fontWeight: 600,
+  padding: "14px 28px", fontSize: 17, borderRadius: 999, border: 0,
+  background: "#fff", color: "#000", fontWeight: 600, cursor: "pointer",
+};
+const btnSecondary: React.CSSProperties = {
+  background: "rgba(255,255,255,0.2)", color: "#fff",
+  border: "1px solid rgba(255,255,255,0.4)",
 };
 const overlay = (bg: string): React.CSSProperties => ({
   position: "absolute", top: "50%", left: 0, right: 0, transform: "translateY(-50%)",
-  textAlign: "center", padding: "16px", background: bg, fontSize: 22, fontWeight: 700,
+  textAlign: "center", padding: "16px", background: bg, fontSize: 22, fontWeight: 700, color: "#fff",
 });
-const stepBanner: React.CSSProperties = {
+const modeBanner = (mode: "walking" | "at_stop"): React.CSSProperties => ({
   position: "absolute", top: 0, left: 0, right: 0,
-  padding: "12px 16px", background: "rgba(0,0,0,0.65)", color: "#fff",
-};
+  padding: "12px 16px",
+  background: mode === "at_stop" ? "rgba(79,70,229,0.85)" : "rgba(0,0,0,0.65)",
+  color: "#fff",
+});
 const preCaptureTips: React.CSSProperties = {
   position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
   padding: "20px 24px", background: "rgba(0,0,0,0.75)", borderRadius: 12, color: "#fff",
-  lineHeight: 1.7, minWidth: 260,
+  lineHeight: 1.8, minWidth: 280,
 };

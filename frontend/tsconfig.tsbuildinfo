@@ -1,0 +1,1 @@
+{"root":["./src/api.ts","./src/main.tsx","./src/vendor.d.ts","./src/capture/coveragemap.ts","./src/capture/guidedrecorder.tsx","./src/pages/capture.tsx","./src/pages/demo.tsx","./src/pages/status.tsx","./src/pages/viewer.tsx","./src/viewer/panoramaviewer.tsx"],"errors":true,"version":"5.9.3"}

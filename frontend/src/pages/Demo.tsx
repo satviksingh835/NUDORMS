@@ -1,13 +1,19 @@
 import { useCallback, useState } from "react";
-import { SplatViewer } from "../viewer/SplatViewer";
+import { PanoramaViewer, type GraphJSON } from "../viewer/PanoramaViewer";
 
 export function DemoPage() {
   const [file, setFile] = useState<File | null>(null);
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
   const accept = useCallback((f: File) => {
-    if (f.name.endsWith(".ply") || f.name.endsWith(".splat")) setFile(f);
-  }, []);
+    if (f.name.endsWith(".jpg") || f.name.endsWith(".jpeg") || f.name.endsWith(".png")) {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      const url = URL.createObjectURL(f);
+      setObjectUrl(url);
+      setFile(f);
+    }
+  }, [objectUrl]);
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
@@ -27,14 +33,20 @@ export function DemoPage() {
     [accept],
   );
 
-  if (file) {
+  if (file && objectUrl) {
+    // Wrap single image as a one-node, no-edge graph for the viewer
+    const demoGraph: GraphJSON = {
+      nodes: [{ id: "demo", pano_key: "", position: [0, 0, 0] }],
+      edges: [],
+    };
+    const demoPanoUrls: Record<string, string> = { demo: objectUrl };
+
     return (
       <div style={{ position: "fixed", inset: 0, background: "#0a0a0a" }}>
-        <SplatViewer file={file} />
+        <PanoramaViewer graph={demoGraph} panoUrls={demoPanoUrls} initialNodeId="demo" />
 
-        {/* Back button */}
         <button
-          onClick={() => setFile(null)}
+          onClick={() => { setFile(null); URL.revokeObjectURL(objectUrl); setObjectUrl(null); }}
           style={styles.backBtn}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -43,7 +55,6 @@ export function DemoPage() {
           Back
         </button>
 
-        {/* File label */}
         <div style={styles.fileLabel}>
           <span style={styles.fileLabelDot} />
           {file.name}
@@ -58,15 +69,10 @@ export function DemoPage() {
     <div style={styles.root}>
       <style>{fonts}</style>
 
-      {/* Wordmark */}
       <div style={styles.wordmark}>NUDORMS</div>
 
-      {/* Drop zone */}
       <div
-        style={{
-          ...styles.dropZone,
-          ...(dragging ? styles.dropZoneActive : {}),
-        }}
+        style={{ ...styles.dropZone, ...(dragging ? styles.dropZoneActive : {}) }}
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
@@ -79,14 +85,14 @@ export function DemoPage() {
           </svg>
         </div>
 
-        <p style={styles.dropTitle}>Drop your file here</p>
-        <p style={styles.dropSub}>.ply · .splat</p>
+        <p style={styles.dropTitle}>Drop an equirectangular image</p>
+        <p style={styles.dropSub}>.jpg · .png</p>
 
         <label style={styles.browseBtn}>
           Browse files
           <input
             type="file"
-            accept=".ply,.splat"
+            accept=".jpg,.jpeg,.png"
             style={{ display: "none" }}
             onChange={onFileInput}
           />
@@ -110,7 +116,6 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     fontFamily: "'DM Mono', monospace",
-    gap: 0,
   },
   wordmark: {
     position: "fixed",
@@ -143,23 +148,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "rgba(255,255,255,0.4)",
     background: "rgba(255,255,255,0.04)",
   },
-  dropIcon: {
-    color: "rgba(255,255,255,0.25)",
-    marginBottom: 8,
-  },
-  dropTitle: {
-    margin: 0,
-    color: "rgba(255,255,255,0.75)",
-    fontSize: 15,
-    fontWeight: 500,
-    letterSpacing: "0.03em",
-  },
-  dropSub: {
-    margin: 0,
-    color: "rgba(255,255,255,0.25)",
-    fontSize: 11,
-    letterSpacing: "0.08em",
-  },
+  dropIcon: { color: "rgba(255,255,255,0.25)", marginBottom: 8 },
+  dropTitle: { margin: 0, color: "rgba(255,255,255,0.75)", fontSize: 15, fontWeight: 500 },
+  dropSub: { margin: 0, color: "rgba(255,255,255,0.25)", fontSize: 11, letterSpacing: "0.08em" },
   browseBtn: {
     marginTop: 16,
     background: "rgba(255,255,255,0.07)",
@@ -172,7 +163,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 20px",
     cursor: "pointer",
     fontFamily: "'DM Mono', monospace",
-    transition: "background 0.15s",
   },
   footer: {
     position: "fixed",

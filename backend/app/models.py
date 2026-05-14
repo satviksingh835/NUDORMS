@@ -13,13 +13,8 @@ class ScanStatus(str, Enum):
     QC = "qc"
     FRAMES = "frames"
     POSING = "posing"
-    PRIORS = "priors"
-    TRAINING = "training"
-    EVALUATING = "evaluating"
-    RETRYING = "retrying"
-    REFINING = "refining"     # Difix3D+ diffusion artifact fixer
-    MESHING = "meshing"
-    COMPRESSING = "compressing"
+    STITCHING = "stitching"
+    GRAPH_BUILD = "graph_build"
     READY = "ready"
     NEEDS_RECAPTURE = "needs_recapture"
     FAILED = "failed"
@@ -39,9 +34,8 @@ class Scan(Base):
 
     # Pipeline outputs / artifacts (S3 keys).
     raw_video_key: Mapped[str | None] = mapped_column(String, nullable=True)
-    splat_key: Mapped[str | None] = mapped_column(String, nullable=True)
-    mesh_key: Mapped[str | None] = mapped_column(String, nullable=True)
-    lod_keys: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    graph_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    pano_keys: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Quality + telemetry.
     metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -55,6 +49,5 @@ class ScanResponse(BaseModel):
     progress: float = 0.0
     metrics: dict | None = None
     error: str | None = None
-    splat_url: str | None = None
-    mesh_url: str | None = None
-    lod_urls: dict | None = None
+    graph_url: str | None = None
+    pano_urls: dict | None = None

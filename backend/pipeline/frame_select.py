@@ -13,6 +13,7 @@ Output: workdir/frames/0001.jpg ... 0NNN.jpg
 """
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -89,6 +90,7 @@ def run(scan_id: str, workdir: Path) -> StageResult:
     selected: list[Path] = []
     last_gray: np.ndarray | None = None
     rejections = {"too_blurry": 0, "too_close": 0, "too_far": 0}
+    frame_timestamps: dict[str, float] = {}
 
     for path, sharp in zip(candidates, sharpness_arr):
         if len(selected) >= TARGET_FRAMES:
@@ -113,7 +115,12 @@ def run(scan_id: str, workdir: Path) -> StageResult:
         out = frames_dir / f"{len(selected)+1:04d}.jpg"
         shutil.copy(path, out)
         selected.append(out)
+        # ffmpeg %05d starts at 1; candidate N (1-based) was captured at (N-1)/fps seconds
+        candidate_n = int(path.stem)
+        frame_timestamps[out.name] = (candidate_n - 1) / DECODE_FPS
         last_gray = gray
+
+    (frames_dir / "frame_timestamps.json").write_text(json.dumps(frame_timestamps))
 
     if len(selected) < MIN_FRAMES:
         return StageResult(

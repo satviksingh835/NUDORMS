@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { getScan, type ScanResponse } from "../api";
-import { SplatViewer } from "../viewer/SplatViewer";
+import { PanoramaViewer, type GraphJSON } from "../viewer/PanoramaViewer";
 
 /* ─── Loading screen ─────────────────────────────────────────── */
 function LoadingScreen() {
@@ -12,7 +12,7 @@ function LoadingScreen() {
         <div style={styles.ring}>
           <div style={styles.ringInner} />
         </div>
-        <p style={styles.loadingText}>Reconstructing your space</p>
+        <p style={styles.loadingText}>Building your tour</p>
         <p style={styles.loadingSubtext}>This may take a moment</p>
       </div>
       <style>{ringAnim}</style>
@@ -34,27 +34,6 @@ function NotReadyScreen({ status }: { status: string }) {
         </p>
         <p style={styles.notReadyHint}>This page will update automatically.</p>
       </div>
-    </div>
-  );
-}
-
-/* ─── Controls hint (fades after 4 s) ────────────────────────── */
-function ControlsHint() {
-  const [visible, setVisible] = useState(true);
-  useEffect(() => {
-    const t = setTimeout(() => setVisible(false), 4000);
-    return () => clearTimeout(t);
-  }, []);
-  return (
-    <div
-      style={{
-        ...styles.hint,
-        opacity: visible ? 1 : 0,
-        transition: "opacity 0.8s ease",
-      }}
-    >
-      <span style={styles.hintIcon}>⌨</span>
-      <span>WASD to move · drag to look</span>
     </div>
   );
 }
@@ -93,6 +72,7 @@ function ShareButton() {
 export function ViewerPage() {
   const { id } = useParams<{ id: string }>();
   const [scan, setScan] = useState<ScanResponse | null>(null);
+  const [graph, setGraph] = useState<GraphJSON | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -110,38 +90,43 @@ export function ViewerPage() {
     }
   }, [scan]);
 
-  const lodUrls =
-    scan?.status === "ready"
-      ? [
-          scan.lod_urls?.preview,
-          scan.lod_urls?.standard,
-          scan.lod_urls?.hires ?? scan.splat_url ?? null,
-        ].filter((u): u is string => Boolean(u))
-      : [];
+  // Fetch graph.json when graph_url is available
+  useEffect(() => {
+    if (!scan?.graph_url) return;
+    fetch(scan.graph_url)
+      .then((r) => r.json())
+      .then(setGraph)
+      .catch(() => {});
+  }, [scan?.graph_url]);
 
   const label = id ? `Scan ${id.slice(0, 8).toUpperCase()}` : "Untitled space";
+  const panoUrls = scan?.pano_urls ?? {};
+  const ready = scan?.status === "ready" && graph !== null;
 
   return (
     <div style={styles.root}>
-      {/* Canvas */}
-      {lodUrls.length > 0 && <SplatViewer lodUrls={lodUrls} />}
+      {/* Panorama canvas */}
+      {ready && (
+        <PanoramaViewer
+          graph={graph!}
+          panoUrls={panoUrls as Record<string, string>}
+        />
+      )}
 
       {/* Overlays only when not ready */}
       {!scan && <LoadingScreen />}
       {scan && scan.status !== "ready" && <NotReadyScreen status={scan.status} />}
+      {scan?.status === "ready" && !graph && <LoadingScreen />}
 
       {/* UI chrome — shown over the canvas once ready */}
-      {scan?.status === "ready" && (
+      {ready && (
         <>
-          {/* Top-left wordmark */}
           <div style={styles.wordmark}>
             <span style={styles.wordmarkText}>NUDORMS</span>
           </div>
-
-          {/* Bottom bar */}
           <div style={styles.bottomBar}>
             <span style={styles.roomLabel}>{label}</span>
-            <ControlsHint />
+            <span style={styles.hint}>drag to look · click arrows to move</span>
             <ShareButton />
           </div>
         </>
@@ -298,16 +283,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "'DM Mono', monospace",
   },
   hint: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
     color: "rgba(255,255,255,0.35)",
     fontSize: 11,
     letterSpacing: "0.04em",
-  },
-  hintIcon: {
-    fontSize: 13,
-    opacity: 0.6,
   },
   shareBtn: {
     display: "flex",
@@ -323,7 +301,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "'DM Mono', monospace",
     padding: "5px 12px",
     cursor: "pointer",
-    transition: "background 0.15s, color 0.15s",
   },
 };
 

@@ -4,8 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { getScan, type ScanResponse } from "../api";
 
 const STAGE_ORDER = [
-  "queued", "qc", "frames", "posing", "training",
-  "evaluating", "retrying", "meshing", "compressing", "ready",
+  "queued", "qc", "frames", "posing", "stitching", "graph_build", "ready",
 ] as const;
 
 const STAGE_LABEL: Record<string, string> = {
@@ -13,11 +12,8 @@ const STAGE_LABEL: Record<string, string> = {
   qc: "Checking capture quality",
   frames: "Selecting frames",
   posing: "Estimating camera positions",
-  training: "Training 3D model",
-  evaluating: "Evaluating quality",
-  retrying: "Retraining at higher quality",
-  meshing: "Building mesh",
-  compressing: "Compressing for streaming",
+  stitching: "Stitching panoramas",
+  graph_build: "Building tour graph",
   ready: "Ready",
   needs_recapture: "Needs recapture",
   failed: "Failed",

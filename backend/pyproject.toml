@@ -22,9 +22,7 @@ dependencies = [
 # GPU-only deps (installed in the worker image, not the API image)
 gpu = [
   "torch>=2.4",
-  "gsplat>=1.4",
   "pycolmap>=3.10",
-  "lpips>=0.1.4",
 ]
 
 [build-system]
