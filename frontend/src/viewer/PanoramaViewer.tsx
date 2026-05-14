@@ -1,5 +1,12 @@
+/**
+ * PanoramaViewer — equirectangular 360° viewer built on Three.js.
+ * No PSV dependency: avoids the multiple-Three.js-instance and CSS-detection bugs.
+ *
+ * Controls: mouse drag / touch drag to look around.
+ * Arrows: HTML overlay divs projected from 3D direction vectors.
+ */
 import { useEffect, useRef, useState } from "react";
-import "@photo-sphere-viewer/core/index.css";
+import * as THREE from "three";
 
 export interface GraphNode {
   id: string;
@@ -10,7 +17,7 @@ export interface GraphNode {
 export interface GraphEdge {
   from: string;
   to: string;
-  azimuth_from: number;   // degrees [0,360), where 0 = pano image center
+  azimuth_from: number;   // degrees [0,360) clockwise from pano center
   azimuth_to: number;
   distance_m: number;
 }
@@ -26,138 +33,269 @@ interface Props {
   initialNodeId?: string;
 }
 
+interface ArrowOverlay {
+  edgeTo: string;
+  x: number;   // CSS % from left
+  y: number;   // CSS % from top
+  dist: number;
+  visible: boolean;
+}
+
 export function PanoramaViewer({ graph, panoUrls, initialNodeId }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<any>(null);
-  const markersPluginRef = useRef<any>(null);
-  const [currentNodeId, setCurrentNodeId] = useState<string>(
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stateRef = useRef<{
+    renderer: THREE.WebGLRenderer;
+    camera: THREE.PerspectiveCamera;
+    scene: THREE.Scene;
+    mesh: THREE.Mesh;
+    loader: THREE.TextureLoader;
+    animId: number;
+    dragging: boolean;
+    lastX: number;
+    lastY: number;
+    lon: number;   // horizontal look angle, degrees
+    lat: number;   // vertical look angle, degrees
+  } | null>(null);
+
+  const [currentNodeId, setCurrentNodeId] = useState(
     initialNodeId ?? graph.nodes[0]?.id ?? ""
   );
+  const [arrows, setArrows] = useState<ArrowOverlay[]>([]);
 
-  // Navigate to a node: load its pano and set markers for its outgoing edges
-  const navigateTo = (nodeId: string, viewer: any, markersPlugin: any) => {
-    const url = panoUrls[nodeId];
-    if (!url) return;
+  // Compute 2D arrow positions from 3D directions
+  const updateArrows = (nodeId: string, lon: number, lat: number) => {
     const outEdges = graph.edges.filter((e) => e.from === nodeId);
+    if (!canvasRef.current) return;
+    const s = stateRef.current;
+    if (!s) return;
 
-    viewer.setPanorama(url).then(() => {
-      markersPlugin.clearMarkers();
-      outEdges.forEach((edge) => {
-        const yaw = ((edge.azimuth_from % 360) * Math.PI) / 180;
-        markersPlugin.addMarker({
-          id: `arrow-${edge.to}`,
-          position: { yaw, pitch: -0.5 },  // ~-30° pitch, near the floor horizon
-          html: arrowHtml(edge.distance_m),
-          size: { width: 80, height: 80 },
-          style: { cursor: "pointer" },
-          data: { targetNodeId: edge.to },
-        });
-      });
-      setCurrentNodeId(nodeId);
+    // Sync camera direction for projection
+    const latRad = THREE.MathUtils.degToRad(Math.max(-85, Math.min(85, lat)));
+    const lonRad = THREE.MathUtils.degToRad(lon);
+    const target = new THREE.Vector3(
+      Math.cos(latRad) * Math.sin(lonRad),
+      Math.sin(latRad),
+      Math.cos(latRad) * Math.cos(lonRad),
+    );
+    s.camera.lookAt(target);
+    s.camera.updateMatrixWorld();
+
+    const projected = outEdges.map((edge) => {
+      // azimuth_from: 0° = forward (pano center), clockwise positive
+      const az = THREE.MathUtils.degToRad(edge.azimuth_from);
+      // Arrow sits at pitch -25° (near floor horizon)
+      const pitch = THREE.MathUtils.degToRad(-25);
+      // World direction of this arrow (arrow azimuth is relative to pano center = lon=0)
+      const arrowLonRad = THREE.MathUtils.degToRad(lon) - az; // subtract because clockwise
+      const dir = new THREE.Vector3(
+        Math.cos(pitch) * Math.sin(arrowLonRad),
+        Math.sin(pitch),
+        Math.cos(pitch) * Math.cos(arrowLonRad),
+      );
+
+      // Project world point (camera-relative) to NDC
+      const worldPt = dir.clone().multiplyScalar(100);
+      const ndc = worldPt.project(s.camera);
+      const x = ((ndc.x + 1) / 2) * 100;
+      const y = ((1 - ndc.y) / 2) * 100;
+      const visible = ndc.z < 1 && x > 5 && x < 95 && y > 5 && y < 95;
+
+      return { edgeTo: edge.to, x, y, dist: edge.distance_m, visible };
     });
+
+    setArrows(projected);
+  };
+
+  const loadPano = (nodeId: string) => {
+    const s = stateRef.current;
+    if (!s) return;
+    const url = panoUrls[nodeId];
+    if (!url) { console.error("[Pano] no url for node", nodeId); return; }
+    console.log("[Pano] loading", nodeId, url.slice(0, 60));
+    s.loader.load(
+      url,
+      (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        (s.mesh.material as THREE.MeshBasicMaterial).map = tex;
+        (s.mesh.material as THREE.MeshBasicMaterial).needsUpdate = true;
+        console.log("[Pano] texture loaded OK for", nodeId);
+        setCurrentNodeId(nodeId);
+        updateArrows(nodeId, s.lon, s.lat);
+      },
+      undefined,
+      (err) => console.error("[Pano] texture load error:", err),
+    );
   };
 
   useEffect(() => {
-    if (!containerRef.current || graph.nodes.length === 0) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    let viewer: any = null;
-    let cancelled = false;
+    console.log("[Pano] init Three.js renderer");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
 
-    (async () => {
-      const [{ Viewer }, { MarkersPlugin }] = await Promise.all([
-        import("@photo-sphere-viewer/core"),
-        import("@photo-sphere-viewer/markers-plugin"),
-      ]);
-      if (cancelled) return;
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 0);
 
-      const startNodeId = initialNodeId ?? graph.nodes[0].id;
-      const startUrl = panoUrls[startNodeId] ?? "";
+    const scene = new THREE.Scene();
+    const geo = new THREE.SphereGeometry(500, 60, 40);
+    geo.scale(-1, 1, 1);   // flip normals to render inside
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const mesh = new THREE.Mesh(geo, mat);
+    scene.add(mesh);
 
-      viewer = new Viewer({
-        container: containerRef.current!,
-        panorama: startUrl,
-        plugins: [[MarkersPlugin, {}]],
-        defaultYaw: 0,
-        defaultPitch: 0,
-        touchmoveTwoFingers: false,
-        navbar: false,
-      });
-      viewerRef.current = viewer;
+    const loader = new THREE.TextureLoader();
 
-      const markersPlugin: any = viewer.getPlugin(MarkersPlugin);
-      markersPluginRef.current = markersPlugin;
+    let animId = 0;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let lon = 0;
+    let lat = 0;
 
-      // Set initial markers
-      const outEdges = graph.edges.filter((e) => e.from === startNodeId);
-      viewer.addEventListener("ready", () => {
-        outEdges.forEach((edge) => {
-          const yaw = ((edge.azimuth_from % 360) * Math.PI) / 180;
-          markersPlugin.addMarker({
-            id: `arrow-${edge.to}`,
-            position: { yaw, pitch: -0.5 },
-            html: arrowHtml(edge.distance_m),
-            size: { width: 80, height: 80 },
-            style: { cursor: "pointer" },
-            data: { targetNodeId: edge.to },
-          });
-        });
-      }, { once: true });
+    stateRef.current = { renderer, camera, scene, mesh, loader, animId, dragging, lastX, lastY, lon, lat };
+    const s = stateRef.current;
 
-      // Click handler for arrow markers
-      markersPlugin.addEventListener("select-marker", ({ marker }: any) => {
-        const targetId = marker.data?.targetNodeId;
-        if (targetId) {
-          navigateTo(targetId, viewer, markersPlugin);
-        }
-      });
-    })();
+    const animate = () => {
+      s.animId = requestAnimationFrame(animate);
+      const latRad = THREE.MathUtils.degToRad(Math.max(-85, Math.min(85, s.lat)));
+      const lonRad = THREE.MathUtils.degToRad(s.lon);
+      camera.lookAt(
+        Math.cos(latRad) * Math.sin(lonRad),
+        Math.sin(latRad),
+        Math.cos(latRad) * Math.cos(lonRad),
+      );
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    const onResize = () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      updateArrows(s.lat === 0 && s.lon === 0 ? (initialNodeId ?? graph.nodes[0]?.id ?? "") : currentNodeId, s.lon, s.lat);
+    };
+    window.addEventListener("resize", onResize);
+
+    // Mouse drag
+    const onMouseDown = (e: MouseEvent) => { s.dragging = true; s.lastX = e.clientX; s.lastY = e.clientY; };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!s.dragging) return;
+      s.lon -= (e.clientX - s.lastX) * 0.25;
+      s.lat -= (e.clientY - s.lastY) * 0.25;
+      s.lastX = e.clientX; s.lastY = e.clientY;
+    };
+    const onMouseUp = () => { s.dragging = false; };
+
+    // Touch drag
+    const onTouchStart = (e: TouchEvent) => { s.dragging = true; s.lastX = e.touches[0].clientX; s.lastY = e.touches[0].clientY; };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!s.dragging) return;
+      s.lon -= (e.touches[0].clientX - s.lastX) * 0.25;
+      s.lat -= (e.touches[0].clientY - s.lastY) * 0.25;
+      s.lastX = e.touches[0].clientX; s.lastY = e.touches[0].clientY;
+    };
+    const onTouchEnd = () => { s.dragging = false; };
+
+    canvas.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    canvas.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchend", onTouchEnd);
+
+    // Load initial panorama
+    const startId = initialNodeId ?? graph.nodes[0]?.id ?? "";
+    loadPano(startId);
 
     return () => {
-      cancelled = true;
-      viewerRef.current?.destroy?.();
-      viewerRef.current = null;
+      cancelAnimationFrame(s.animId);
+      renderer.dispose();
+      window.removeEventListener("resize", onResize);
+      canvas.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+      stateRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Preload neighbor images after node changes
+  // Recompute arrow positions on every animation frame while dragging
   useEffect(() => {
     if (!currentNodeId) return;
-    const neighbors = graph.edges
-      .filter((e) => e.from === currentNodeId)
-      .map((e) => e.to);
-    neighbors.forEach((nid) => {
-      const url = panoUrls[nid];
-      if (url) {
-        const img = new Image();
-        img.src = url;
-      }
+    let id: number;
+    const tick = () => {
+      const s = stateRef.current;
+      if (s) updateArrows(currentNodeId, s.lon, s.lat);
+      id = requestAnimationFrame(tick);
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentNodeId]);
+
+  // Preload neighbors
+  useEffect(() => {
+    graph.edges.filter((e) => e.from === currentNodeId).forEach((e) => {
+      const url = panoUrls[e.to];
+      if (url) { const img = new Image(); img.src = url; }
     });
   }, [currentNodeId, graph.edges, panoUrls]);
 
+  const handleArrowClick = (toNodeId: string) => {
+    const s = stateRef.current;
+    if (s) { s.lon = 0; s.lat = 0; }
+    loadPano(toNodeId);
+  };
+
   return (
-    <>
-      <div ref={containerRef} style={{ position: "fixed", inset: 0 }} />
-      <style>{psvStyles}</style>
-    </>
+    <div style={{ position: "fixed", inset: 0, cursor: "grab" }}>
+      <canvas
+        ref={canvasRef}
+        style={{ display: "block", width: "100%", height: "100%" }}
+      />
+      {/* Arrow overlays */}
+      {arrows.filter((a) => a.visible).map((a) => (
+        <button
+          key={a.edgeTo}
+          onClick={() => handleArrowClick(a.edgeTo)}
+          style={{
+            position: "absolute",
+            left: `${a.x}%`,
+            top: `${a.y}%`,
+            transform: "translate(-50%, -50%)",
+            background: "rgba(255,255,255,0.15)",
+            border: "2px solid rgba(255,255,255,0.6)",
+            borderRadius: "50%",
+            width: 64,
+            height: 64,
+            cursor: "pointer",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 2,
+            backdropFilter: "blur(4px)",
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.3)")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.15)")}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <polyline points="6,15 12,7 18,15" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          {a.dist >= 3 && (
+            <span style={{ color: "#fff", fontSize: 9, fontFamily: "monospace", lineHeight: 1 }}>
+              {a.dist.toFixed(0)}m
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
   );
 }
-
-function arrowHtml(distanceM: number): string {
-  const label = distanceM < 5 ? "" : `${distanceM.toFixed(0)} m`;
-  return `
-    <div style="display:flex;flex-direction:column;align-items:center;gap:4px;user-select:none;">
-      <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-        <circle cx="24" cy="24" r="22" fill="rgba(255,255,255,0.18)" stroke="rgba(255,255,255,0.6)" stroke-width="2"/>
-        <polyline points="16,28 24,16 32,28" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-      </svg>
-      ${label ? `<span style="color:#fff;font-size:11px;font-family:monospace;background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:4px;">${label}</span>` : ""}
-    </div>
-  `;
-}
-
-const psvStyles = `
-  .psv-container { background: #0a0a0a; }
-  .psv-marker { transition: opacity 0.2s; }
-  .psv-marker:hover { opacity: 0.8; }
-`;
