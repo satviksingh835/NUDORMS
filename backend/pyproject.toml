@@ -23,6 +23,7 @@ dependencies = [
 gpu = [
   "torch>=2.4",
   "pycolmap>=3.10",
+  "kornia>=0.7",
 ]
 
 [build-system]

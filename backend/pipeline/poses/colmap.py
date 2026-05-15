@@ -47,19 +47,15 @@ def run(frames_dir: Path, out_dir: Path) -> StageResult:
             "--image_path", str(frames_dir),
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "OPENCV",
-            "--FeatureExtraction.type", "ALIKED_N32",
-            "--FeatureExtraction.use_gpu", "1",
-            "--AlikedExtraction.n32_model_path", ALIKED_N32_MODEL,
-            "--AlikedExtraction.max_num_features", "4096",
+            "--FeatureExtraction.use_gpu", "0",
+            "--FeatureExtraction.type", "SIFT",
         ])
         _run([
             "colmap", "sequential_matcher",
             "--database_path", str(db),
             "--SequentialMatching.overlap", str(SEQUENTIAL_MATCHER_OVERLAP),
             "--SequentialMatching.quadratic_overlap", "1",
-            "--FeatureMatching.type", "ALIKED_LIGHTGLUE",
-            "--FeatureMatching.use_gpu", "1",
-            "--AlikedMatching.lightglue_model_path", ALIKED_LIGHTGLUE_MODEL,
+            "--FeatureMatching.use_gpu", "0",
         ])
         _run([
             "colmap", "mapper",

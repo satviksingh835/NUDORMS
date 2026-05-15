@@ -37,6 +37,7 @@ log = logging.getLogger("nudorms.stitch")
 
 MIN_YAW_DEG = 270.0   # require at least 270° rotation to call it a pano
 MIN_FRAMES_PER_STOP = 6
+MAX_FRAMES_PER_STOP = 30  # enblend fails with excessive overlap above ~30 frames
 JPEG_QUALITY = 90
 # Panorama canvas width (height = width/2 for equirectangular 2:1)
 PANO_WIDTH = 8000
@@ -97,32 +98,45 @@ def _yaw_spread_deg(frames_in_stop: list[str], pose_map: dict[str, dict]) -> flo
 
 def _run_hugin(frames: list[Path], out_jpg: Path, tmp: Path) -> bool:
     """Stitch frames into an equirectangular JPEG using Hugin CLI tools."""
+    tmp.mkdir(parents=True, exist_ok=True)
     pto = tmp / "project.pto"
     frame_args = [str(f) for f in frames]
+
+    # Ensure conda-forge hugin tools are on PATH (needed when launched via Celery)
+    import os
+    env = os.environ.copy()
+    mamba_bin = Path("/root/.local/share/mamba/bin")
+    if mamba_bin.exists():
+        env["PATH"] = str(mamba_bin) + ":" + env.get("PATH", "")
 
     try:
         # 1. Generate initial project
         subprocess.run(
             ["pto_gen", "-o", str(pto)] + frame_args,
-            check=True, capture_output=True,
+            check=True, capture_output=True, env=env,
         )
+        log.info("pto_gen OK → %s (%d bytes)", pto, pto.stat().st_size if pto.exists() else -1)
 
-        # 2. Detect control points
+        # 2. Detect control points using deep learning (LightGlue) instead of Hugin's cpfind.
+        # This solves the textureless dorm wall issue.
+        # Use module execution to prevent pipeline/types.py from shadowing stdlib `types`
         subprocess.run(
-            ["cpfind", "--multirow", "-o", str(pto), str(pto)],
-            check=True, capture_output=True,
+            ["python", "-m", "pipeline.lightglue_pto_match", "--pto", str(pto)],
+            check=True, capture_output=True, env=env, cwd=Path(__file__).parent.parent
         )
+        log.info("lightglue_pto_match OK → %s (%d bytes)", pto, pto.stat().st_size if pto.exists() else -1)
 
         # 3. Remove bad control points
         subprocess.run(
             ["cpclean", "-o", str(pto), str(pto)],
-            check=True, capture_output=True,
+            check=True, capture_output=True, env=env,
         )
+        log.info("cpclean OK")
 
         # 4. Optimize geometry & exposure
         subprocess.run(
             ["autooptimiser", "-a", "-m", "-l", "-s", "-o", str(pto), str(pto)],
-            check=True, capture_output=True,
+            check=True, capture_output=True, env=env,
         )
 
         # 5. Set equirectangular output + canvas
@@ -130,14 +144,14 @@ def _run_hugin(frames: list[Path], out_jpg: Path, tmp: Path) -> bool:
         subprocess.run(
             ["pano_modify", f"--canvas={canvas}", "--crop=AUTO",
              "--projection=2", "-o", str(pto), str(pto)],
-            check=True, capture_output=True,
+            check=True, capture_output=True, env=env,
         )
 
         # 6. Warp individual frames
         nona_prefix = str(tmp / "warp")
         subprocess.run(
             ["nona", "-m", "TIFF_m", "-o", nona_prefix, str(pto)],
-            check=True, capture_output=True,
+            check=True, capture_output=True, env=env,
         )
 
         # 7. Blend
@@ -147,8 +161,8 @@ def _run_hugin(frames: list[Path], out_jpg: Path, tmp: Path) -> bool:
             return False
         tif_out = tmp / "panorama.tif"
         subprocess.run(
-            ["enblend", "-o", str(tif_out)] + [str(w) for w in warped],
-            check=True, capture_output=True,
+            ["enblend", "--wrap=horizontal", "-o", str(tif_out)] + [str(w) for w in warped],
+            check=True, capture_output=True, env=env,
         )
 
         # 8. Convert to JPEG
@@ -227,6 +241,12 @@ def run(
             log.warning("node %s: yaw spread %.1f° < %.1f°, marking degraded",
                         node_id, yaw, MIN_YAW_DEG)
             degraded_nodes.append(node_id)
+
+        # Thin frames to avoid excessive enblend overlap
+        if len(registered) > MAX_FRAMES_PER_STOP:
+            step = len(registered) // MAX_FRAMES_PER_STOP
+            registered = registered[::step][:MAX_FRAMES_PER_STOP]
+            log.info("node %s: thinned to %d frames", node_id, len(registered))
 
         # Run Hugin stitching
         frame_paths = [frames_dir / n for n in registered]

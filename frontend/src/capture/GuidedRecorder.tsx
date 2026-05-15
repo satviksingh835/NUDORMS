@@ -169,16 +169,16 @@ export function GuidedRecorder({ onComplete }: Props) {
         <div style={modeBanner(mode)}>
           {mode === "walking" ? (
             <>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>Walking between stops</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>Walking to Next Node</div>
               <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>
-                Move to your next spot, then tap "At a stop"
+                Walk 5-10 feet to your next spot, then tap "Capture Node"
               </div>
             </>
           ) : (
             <>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>At a stop — rotate 360°</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>Capturing Node — rotate 360°</div>
               <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>
-                Hold steady and rotate slowly all the way around at eye level
+                Hold steady in place and rotate slowly all the way around
               </div>
             </>
           )}
@@ -187,7 +187,7 @@ export function GuidedRecorder({ onComplete }: Props) {
 
       {/* HUD */}
       <div style={hud}>
-        <div>stops: {completedStops}</div>
+        <div>nodes: {completedStops}</div>
         <div>elapsed: {elapsedS.toFixed(0)}s</div>
         {mode === "at_stop" && (
           <div>rotation: {Math.round(stopCoverage * 100)}%</div>
@@ -199,9 +199,9 @@ export function GuidedRecorder({ onComplete }: Props) {
         <div style={preCaptureTips}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>How to capture</div>
           <div>1. Tap "Start" and walk to your first spot</div>
-          <div>2. Tap "At a stop" and do a slow 360° rotation</div>
-          <div>3. Tap "Done with stop" and walk to the next spot</div>
-          <div>4. Repeat for every viewpoint you want (≥ 2 stops)</div>
+          <div>2. Tap "Capture Node" and do a slow 360° rotation</div>
+          <div>3. Tap "Done with Node" and walk 5-10ft to the next location</div>
+          <div>4. Repeat for every spot (e.g. Center, Kitchen, Desk)</div>
           <div>5. Tap "Finish" when done</div>
           <div style={{ marginTop: 8, opacity: 0.7, fontSize: 12 }}>
             Keep phone at eye level. Move slowly. Good lighting helps.
@@ -215,13 +215,13 @@ export function GuidedRecorder({ onComplete }: Props) {
           <button onClick={startRecording} style={btn}>Start capture</button>
         ) : mode === "walking" ? (
           <div style={{ display: "flex", gap: 12 }}>
-            <button onClick={enterStop} style={btn}>At a stop</button>
+            <button onClick={enterStop} style={btn}>Capture Node</button>
             <button
               onClick={finish}
               disabled={!canFinish}
               style={{ ...btn, ...btnSecondary, opacity: canFinish ? 1 : 0.35 }}
             >
-              Finish ({completedStops} stops)
+              Finish ({completedStops} nodes)
             </button>
           </div>
         ) : (
@@ -231,7 +231,7 @@ export function GuidedRecorder({ onComplete }: Props) {
             style={{ ...btn, opacity: stopReady ? 1 : 0.4 }}
           >
             {stopReady
-              ? "Done with stop"
+              ? "Done with Node"
               : `Keep rotating (${Math.round(stopCoverage * 100)}%)`}
           </button>
         )}
